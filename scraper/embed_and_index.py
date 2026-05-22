@@ -109,17 +109,12 @@ def main() -> None:
             m = meta[idx]
             print(f"  [{score:.3f}] {m['part_number']} {m['name']} ({m['category']})")
 
-    # Copy all relational data files to backend
+    # Copy relational data files used by the backend to backend/app/data/
     data_files_to_copy = [
         "model_part_map.json",
         "symptom_part_map.json",
         "part_type_map.json",
         "brand_appliance_map.json",
-        "repairs.json",
-        "blogs.json",
-        "ptls.json",
-        "category_pages.json",
-        "relational_summary.json",
     ]
     for fname in data_files_to_copy:
         src = Path("data") / fname
