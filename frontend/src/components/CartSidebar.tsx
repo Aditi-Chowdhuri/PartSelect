@@ -75,13 +75,13 @@ function CartSidebar({ items, isOpen, onClose, onRemove, onUpdateQty }: Props) {
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[10px] text-brand-blue hover:underline"
+                          className="text-[10px] text-gray-400 hover:text-brand-orange transition-colors"
                         >
                           View part ↗
                         </a>
                       )}
                     </div>
-                    <p className="text-sm font-bold text-brand-blue mt-1">
+                    <p className="text-sm font-bold text-gray-900 mt-1">
                       ${(item.price * item.quantity).toFixed(2)}
                     </p>
                   </div>

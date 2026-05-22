@@ -73,6 +73,8 @@ partselect-agent/
 
 ## Architecture
 
+![System Architecture](System%20Design.png)
+
 ```
 frontend (Next.js)
   └── SSE stream  ──►  backend (FastAPI)
@@ -88,6 +90,12 @@ frontend (Next.js)
 ```
 
 See [HLD.md](HLD.md) for the full component breakdown, request lifecycle, security model, and deployment instructions.
+
+---
+
+## UI
+
+![UI Design Spec](UI%20Design%20Spec.png)
 
 ---
 
