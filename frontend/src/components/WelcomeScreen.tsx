@@ -15,7 +15,7 @@ const QUERIES_BY_FILTER: Record<ApplianceFilter, { label: string; query: string 
   all: [
     { label: 'Ice maker not working',    query: 'The ice maker on my Whirlpool fridge is not working. How can I fix it?' },
     { label: 'Dishwasher not draining',  query: 'My dishwasher is not draining. What parts should I check?' },
-    { label: 'Check part compatibility', query: 'Is part PS11752778 compatible with my WDT780SAEM1 model?' },
+    { label: 'Check part compatibility', query: 'What parts are compatible with model 25344352401?' },
     { label: 'Find a door gasket',       query: 'I need a replacement door gasket for my GE refrigerator' },
   ],
   refrigerator: [
