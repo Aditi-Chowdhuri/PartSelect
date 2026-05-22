@@ -1,0 +1,8 @@
+httpx
+beautifulsoup4
+tqdm
+sentence-transformers
+faiss-cpu
+numpy
+python-dotenv
+selenium

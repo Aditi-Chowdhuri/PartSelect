@@ -1,0 +1,36 @@
+# Environment variables — never commit real keys
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build output
+.next/
+out/
+dist/
+
+# Next.js auto-generated
+next-env.d.ts
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# FAISS binary index (regenerate with embed_and_index.py)
+backend/app/data/*.bin
+
+# Raw scraped data (regenerate with scraper scripts)
+scraper/data/
+
+# Claude Code local settings
+.claude/
+
+# Misc
+.DS_Store
+*.log
+*.md
