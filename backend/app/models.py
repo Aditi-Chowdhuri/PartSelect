@@ -17,8 +17,3 @@ class CartItem(BaseModel):
     name: str
     price: float
     quantity: int = 1
-
-
-class CartState(BaseModel):
-    items: List[CartItem] = []
-    total: float = 0.0
