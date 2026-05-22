@@ -68,7 +68,19 @@ function CartSidebar({ items, isOpen, onClose, onRemove, onUpdateQty }: Props) {
                 >
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 leading-snug line-clamp-2">{item.name}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">#{item.part_number}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-gray-400">#{item.part_number}</p>
+                      {item.url && (
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-brand-blue hover:underline"
+                        >
+                          View part ↗
+                        </a>
+                      )}
+                    </div>
                     <p className="text-sm font-bold text-brand-blue mt-1">
                       ${(item.price * item.quantity).toFixed(2)}
                     </p>
@@ -119,7 +131,7 @@ function CartSidebar({ items, isOpen, onClose, onRemove, onUpdateQty }: Props) {
               <span className="font-bold text-lg text-gray-900">${subtotal.toFixed(2)}</span>
             </div>
             <a
-              href="https://www.partselect.com/cart"
+              href="https://www.partselect.com/shopping-cart/"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-center gap-2 w-full bg-brand-orange hover:bg-brand-orange-dark text-white font-semibold py-3 px-4 rounded-xl transition-colors shadow-sm"

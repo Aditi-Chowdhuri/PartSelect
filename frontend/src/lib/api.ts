@@ -1,4 +1,4 @@
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8001'
 
 export async function* streamChat(
   messages: Array<{ role: string; content: string }>,
@@ -12,7 +12,9 @@ export async function* streamChat(
 
   if (!response.ok) {
     if (response.status === 429) {
-      throw new Error('Rate limit reached. Please wait a moment and try again.')
+      const retryAfter = response.headers.get('Retry-After')
+      const wait = retryAfter ? ` Please wait ${retryAfter} seconds.` : ' Please wait a moment.'
+      throw new Error(`Rate limit reached.${wait} Try again shortly.`)
     }
     let detail = `Backend error: ${response.status}`
     try {

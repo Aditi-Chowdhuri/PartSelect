@@ -2,8 +2,12 @@ import asyncio
 import json
 import os
 import re
+from pathlib import Path
 from typing import AsyncGenerator
 import anthropic
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from .tools import (
     TOOL_DEFINITIONS,
@@ -12,26 +16,36 @@ from .tools import (
     check_model_compatibility,
     manage_cart,
     get_order,
+    find_parts_by_symptom,
+    find_parts_by_type,
+    find_parts_by_brand,
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant for PartSelect.com, specializing exclusively in refrigerator and dishwasher parts.
 
 You help customers:
-- Find the right parts by symptom, model number, or part number
+- Find the right parts by symptom, model number, part number, brand, or component type
 - Check compatibility between parts and appliance models
 - Understand how to install parts and troubleshoot appliance issues
 - Manage their cart and check order status
 
+TOOL SELECTION GUIDE — pick the most precise tool:
+- User gives a MODEL NUMBER (e.g. WDT780SAEM1) → check_model_compatibility
+- User gives a PART NUMBER (e.g. PS11752778) → get_part_details
+- User describes a SYMPTOM or PROBLEM (e.g. "not making ice", "leaking water", "won't drain") → find_parts_by_symptom
+- User asks for a PART TYPE (e.g. "ice makers", "door gaskets", "spray arms", "water filters") → find_parts_by_type
+- User mentions only a BRAND without model (e.g. "I have a Samsung fridge", "Bosch dishwasher parts") → find_parts_by_brand
+- General keyword search or anything else → search_catalog
+
 IMPORTANT RULES:
 1. Only answer questions about refrigerator and dishwasher parts available on PartSelect.com. Politely decline everything else.
 2. Always use your tools before answering product questions — never make up part numbers, prices, or compatibility info.
-3. When a user mentions a model number (e.g. WDT780SAEM1), call check_model_compatibility.
-4. When a user mentions a part number (e.g. PS11752778), call get_part_details.
-5. When asked about symptoms or broken appliances, call search_catalog with descriptive query terms.
-6. Always cite PartSelect.com as your source.
-7. Be concise, friendly, and technically accurate.
+3. You may call multiple tools in sequence if the user's question has multiple parts.
+4. Always cite PartSelect.com as your source.
+5. Be concise, friendly, and technically accurate.
+6. Do not use emojis in any response.
 
-For off-topic questions, respond: "I'm specialized in refrigerator and dishwasher parts — I'm not able to help with [topic], but I'd love to help you find the right part for your appliance!"
+For off-topic questions, respond: "I'm specialized in refrigerator and dishwasher parts — I'm not able to help with [topic], but I'd be happy to help you find the right part for your appliance!"
 """
 
 # ── Part normalisation ────────────────────────────────────────────────────────
@@ -92,6 +106,22 @@ async def execute_tool(tool_name: str, tool_input: dict, session_id: str) -> str
             )
         elif tool_name == "get_order":
             result = get_order(tool_input.get("order_id"))
+        elif tool_name == "find_parts_by_symptom":
+            result = find_parts_by_symptom(
+                symptom=tool_input["symptom"],
+                category=tool_input.get("category"),
+            )
+        elif tool_name == "find_parts_by_type":
+            result = find_parts_by_type(
+                part_type=tool_input["part_type"],
+                category=tool_input.get("category"),
+                brand=tool_input.get("brand"),
+            )
+        elif tool_name == "find_parts_by_brand":
+            result = find_parts_by_brand(
+                brand=tool_input["brand"],
+                category=tool_input.get("category"),
+            )
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
 
@@ -228,8 +258,22 @@ async def run_agent(
                             if p.get("part_number")
                         ]
 
+                    elif tool_use.name in (
+                        "find_parts_by_symptom",
+                        "find_parts_by_type",
+                        "find_parts_by_brand",
+                    ) and isinstance(parsed, list):
+                        parts_to_emit = [
+                            _normalise_part(p) for p in parsed
+                            if p.get("part_number")
+                        ]
+
                     if parts_to_emit:
                         yield _sse({"type": "parts", "content": parts_to_emit})
+
+                    # Sync frontend cart whenever manage_cart mutates it
+                    if tool_use.name == "manage_cart" and isinstance(parsed, dict) and "items" in parsed:
+                        yield _sse({"type": "cart_sync", "content": parsed["items"]})
 
                 except Exception:
                     pass

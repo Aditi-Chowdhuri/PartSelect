@@ -1,9 +1,11 @@
+import os
 import re
 import time
 import uuid
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +16,7 @@ from .models import ChatRequest
 from .claude_client import run_agent
 from .tools import manage_cart
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 _STEALTH = {
     "User-Agent": (
@@ -68,9 +70,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PartSelect Chat Agent", lifespan=lifespan)
 
+_cors_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -163,9 +168,11 @@ async def part_image(part_number: str):
 async def chat(request: Request, body: ChatRequest):
     ip = _client_ip(request)
     if not _check_rate_limit(ip):
-        raise HTTPException(
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
             status_code=429,
-            detail="Too many requests. Please wait a moment before trying again.",
+            content={"detail": "Too many requests. Please wait before trying again."},
+            headers={"Retry-After": str(int(_RATE_WINDOW))},
         )
 
     if len(body.messages) > 100:

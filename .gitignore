@@ -27,11 +27,15 @@ backend/app/data/*.bin
 # Raw scraped data (regenerate with scraper scripts)
 scraper/data/
 
+# Stray data dir written by build scripts run from project root (root-level only)
+/data/
+
+# Downloaded PartSelect XML sitemaps (large, not tracked)
+xml/
+
 # Claude Code local settings
 .claude/
 
 # Misc
 .DS_Store
 *.log
-*.md
-!README.md

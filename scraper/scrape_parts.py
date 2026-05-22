@@ -1,23 +1,22 @@
 """
-PartSelect parts scraper v3 — paginated CDX discovery, no server-side regex filter.
+PartSelect parts scraper v4 — sitemap-based URL discovery.
 
-CDX strategy: paginate www.partselect.com/PS*.htm in batches of 300 with
-collapse=original. Filter by appliance type locally from the URL slug.
-This avoids the ReadTimeout that happens with a single large limit+filter query.
+URL source: data/sitemap_parts.json  (produced by build_from_sitemap.py)
+Run build_from_sitemap.py first if that file does not exist.
 
 Fetch strategy (per part):
-  1. Direct PartSelect fetch with stealth headers — individual /PS{n}.htm pages
-     are NOT blocked by Akamai (only category listing pages are protected)
+  1. Direct PartSelect fetch with stealth headers
   2. Wayback Machine archived snapshot fallback if direct fetch returns non-200
 
 Resumable: completed parts saved incrementally to data/parts_raw.jsonl —
            safe to Ctrl+C and restart, already-scraped parts are skipped.
 
-Output: data/parts_raw.jsonl  (incremental, one JSON object per line)
-        data/parts_raw.json   (final consolidated, sorted by review count)
+Output: data/parts_raw.jsonl     (incremental, one JSON object per line)
+        data/parts_raw.json      (final consolidated, sorted by review count)
+        data/model_part_map.json (model_number -> {category, parts[]})
 
-Run: python scrape_parts.py
-Est. time: ~25 min for ~1,300 parts (5 concurrent, polite delays)
+Run: python build_from_sitemap.py   (once, downloads sitemaps)
+     python scrape_parts.py         (resumable, scrapes part pages)
 """
 import asyncio
 import json
@@ -29,7 +28,6 @@ import httpx
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-CDX_API  = "http://web.archive.org/cdx/search/cdx"
 WAYBACK  = "https://web.archive.org/web/2023"
 BASE_URL = "https://www.partselect.com"
 
@@ -49,89 +47,37 @@ HEADERS = {
     "Sec-Fetch-Site":            "none",
 }
 
-CONCURRENCY    = 5
-DIRECT_DELAY   = (1.0, 2.0)
-WAYBACK_DELAY  = 1.2
-PARTS_PER_CAT  = 1000    # cap per category; CDX typically has 953 fridge + 395 dish
-CDX_PAGE_SIZE  = 300     # rows per CDX request — keeps each request fast
-CDX_MAX_PAGES  = 40      # up to 12,000 CDX rows scanned total
-CDX_PAGE_DELAY = 1.0     # seconds between CDX page requests (polite)
-TIMEOUT        = 40
-MAX_RETRIES    = 2
+CONCURRENCY   = 5
+DIRECT_DELAY  = (1.0, 2.0)
+WAYBACK_DELAY = 1.2
+TIMEOUT       = 40
+MAX_RETRIES   = 2
 
 
-# ── Step 1: Discover part URLs via paginated CDX API ─────────────────────────
+# ── Step 1: Load part URLs from sitemap ──────────────────────────────────────
 
-async def _cdx_pages(client: httpx.AsyncClient, keyword: str) -> list[tuple[str, str]]:
+def load_sitemap_urls() -> dict[str, list[tuple[str, str]]]:
     """
-    Paginate CDX for PS part URLs matching a keyword (Refrigerator / Dishwasher).
-    Root fix: omit .htm from the URL pattern — CDX returns [] when the pattern
-    has both a wildcard (*) AND a literal suffix (.htm).
-    Use keyword filter + collapse=original + offset pagination to stay fast.
+    Read data/sitemap_parts.json and return parts grouped by category.
+    Returns {'refrigerator': [(ps_num, url), ...], 'dishwasher': [...]}.
     """
-    seen_ps: set[str] = set()
-    results: list[tuple[str, str]] = []
-    offset = 0
+    sitemap_path = Path("data/sitemap_parts.json")
+    if not sitemap_path.exists():
+        raise FileNotFoundError(
+            "data/sitemap_parts.json not found.\n"
+            "Run: python build_from_sitemap.py"
+        )
 
-    for page_num in range(CDX_MAX_PAGES):
-        if len(results) >= PARTS_PER_CAT:
-            break
-        print(f"    CDX {keyword} page {page_num + 1} (offset={offset}, found={len(results)})")
-        try:
-            resp = await client.get(
-                CDX_API,
-                params={
-                    "url":      "www.partselect.com/PS*",
-                    "output":   "json",
-                    "fl":       "original",
-                    "filter":   ["statuscode:200", f"original:(?i).*{keyword}.*"],
-                    "collapse": "original",
-                    "limit":    CDX_PAGE_SIZE,
-                    "offset":   offset,
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-        except Exception as exc:
-            print(f"    CDX error: {exc} — stopping")
-            break
+    entries = json.loads(sitemap_path.read_text(encoding="utf-8"))
+    by_cat: dict[str, list[tuple[str, str]]] = {"refrigerator": [], "dishwasher": []}
+    for entry in entries:
+        cat = entry.get("category", "")
+        if cat in by_cat:
+            by_cat[cat].append((entry["ps_num"], entry["url"]))
 
-        try:
-            data = resp.json()
-        except Exception:
-            break
-
-        rows = data[1:] if len(data) > 1 else []
-        if not rows:
-            print(f"    No more rows for {keyword}")
-            break
-
-        for row in rows:
-            orig_url = row[0].split("?")[0]
-            ps_match = re.search(r"/PS(\d+)", orig_url)
-            if not ps_match:
-                continue
-            ps_num = ps_match.group(1)
-            if ps_num not in seen_ps:
-                seen_ps.add(ps_num)
-                results.append((ps_num, orig_url))
-
-        if len(rows) < CDX_PAGE_SIZE:
-            break
-        offset += CDX_PAGE_SIZE
-        await asyncio.sleep(CDX_PAGE_DELAY)
-
-    return results[:PARTS_PER_CAT]
-
-
-async def discover_part_urls(client: httpx.AsyncClient) -> dict[str, list[tuple[str, str]]]:
-    """Returns {'refrigerator': [(ps_num, url), ...], 'dishwasher': [...]}."""
-    print("Discovering part URLs via Wayback CDX (paginated)...")
-    fridge_urls = await _cdx_pages(client, "Refrigerator")
-    dish_urls   = await _cdx_pages(client, "Dishwasher")
-    print(f"  Refrigerator: {len(fridge_urls)} unique part URLs")
-    print(f"  Dishwasher:   {len(dish_urls)} unique part URLs")
-    return {"refrigerator": fridge_urls, "dishwasher": dish_urls}
+    print(f"Loaded sitemap_parts.json: {len(by_cat['refrigerator'])} refrigerator, "
+          f"{len(by_cat['dishwasher'])} dishwasher parts")
+    return by_cat
 
 
 # ── Step 2: Parse PartSelect HTML ─────────────────────────────────────────────
@@ -144,8 +90,8 @@ def parse_part(html: str, ps_num: str, orig_url: str, category: str) -> dict | N
 
     is_wayback = bool(soup.find(id="wm-ipp-inside") or "web.archive.org/web/" in html[:1000])
 
-    # Use the canonical URL from CDX (full slug) — fall back to short form only if needed
-    canonical_url = orig_url if orig_url.startswith("https://www.partselect.com/PS") else f"https://www.partselect.com/PS{ps_num}.htm"
+    canonical_url = orig_url if orig_url.startswith("https://www.partselect.com/PS") \
+        else f"https://www.partselect.com/PS{ps_num}.htm"
 
     part: dict = {
         "part_number": f"PS{ps_num}",
@@ -167,7 +113,7 @@ def parse_part(html: str, ps_num: str, orig_url: str, category: str) -> dict | N
     price_el = (
         soup.find(attrs={"itemprop": "price"})
         or soup.find("span", class_=re.compile(r"price", re.I))
-        or soup.find("div", class_=re.compile(r"price", re.I))
+        or soup.find("div",  class_=re.compile(r"price", re.I))
     )
     if price_el:
         raw = price_el.get("content") or price_el.get_text(strip=True)
@@ -357,7 +303,7 @@ def parse_part(html: str, ps_num: str, orig_url: str, category: str) -> dict | N
     if compat:
         models = [
             a.get_text(strip=True)
-            for a in compat.find_all("a", limit=30)
+            for a in compat.find_all("a", limit=50)
             if re.match(r"[A-Z0-9]{5,15}$", a.get_text(strip=True))
         ]
         part["compatible_models"] = models
@@ -429,6 +375,29 @@ async def fetch_and_parse(
         return result
 
 
+# ── Step 4: Build model -> parts relational map ────────────────────────────────
+
+def build_model_part_map(all_parts: list[dict]) -> dict[str, dict]:
+    """
+    Build a relational map: model_number -> {category, parts: [part_number, ...]}.
+    Derived from the compatible_models field on each scraped part.
+    """
+    model_map: dict[str, dict] = {}
+    for part in all_parts:
+        cat = part.get("category", "")
+        pn  = part.get("part_number", "")
+        if not pn:
+            continue
+        for mn in part.get("compatible_models", []):
+            if not mn:
+                continue
+            if mn not in model_map:
+                model_map[mn] = {"category": cat, "parts": []}
+            if pn not in model_map[mn]["parts"]:
+                model_map[mn]["parts"].append(pn)
+    return model_map
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
@@ -452,18 +421,19 @@ async def main() -> None:
         if done_ids:
             print(f"Resuming: {len(done_ids)} parts already scraped, skipping them.")
 
+    # Load URLs from sitemap
+    by_cat = load_sitemap_urls()
+    fridge_urls = by_cat["refrigerator"]
+    dish_urls   = by_cat["dishwasher"]
+
+    all_targets = (
+        [(ps, url, "refrigerator") for ps, url in fridge_urls]
+        + [(ps, url, "dishwasher")   for ps, url in dish_urls]
+    )
+    remaining = [(ps, url, cat) for ps, url, cat in all_targets if ps not in done_ids]
+    print(f"\nTargeting {len(all_targets)} parts — {len(remaining)} left to fetch.\n")
+
     async with httpx.AsyncClient(timeout=90) as client:
-        by_cat = await discover_part_urls(client)
-        fridge_urls = by_cat["refrigerator"]
-        dish_urls   = by_cat["dishwasher"]
-
-        all_targets = (
-            [(ps, url, "refrigerator") for ps, url in fridge_urls]
-            + [(ps, url, "dishwasher")   for ps, url in dish_urls]
-        )
-        remaining = [(ps, url, cat) for ps, url, cat in all_targets if ps not in done_ids]
-        print(f"\nTargeting {len(all_targets)} parts — {len(remaining)} left to fetch.\n")
-
         semaphore = asyncio.Semaphore(CONCURRENCY)
         tasks = [
             fetch_and_parse(client, ps, url, cat, semaphore, jsonl_path, done_ids)
@@ -498,16 +468,25 @@ async def main() -> None:
     install_c = sum(1 for p in all_parts if p.get("install_difficulty"))
     price_c   = sum(1 for p in all_parts if p.get("price", 0) > 0)
     video_c   = sum(1 for p in all_parts if p.get("video_url"))
+    compat_c  = sum(1 for p in all_parts if p.get("compatible_models"))
 
-    print(f"\nSaved {len(all_parts)} parts to {json_path}")
-    print(f"  Refrigerator:      {fridge_c}")
-    print(f"  Dishwasher:        {dish_c}")
-    print(f"  Source - direct:   {direct_c}")
-    print(f"  Source - wayback:  {wayback_c}")
-    print(f"  With price:        {price_c}")
-    print(f"  With symptoms:     {symptom_c}")
-    print(f"  With install info: {install_c}")
-    print(f"  With video:        {video_c}")
+    print(f"\nSaved {len(all_parts)} parts -> {json_path}")
+    print(f"  Refrigerator:         {fridge_c}")
+    print(f"  Dishwasher:           {dish_c}")
+    print(f"  Source – direct:      {direct_c}")
+    print(f"  Source – wayback:     {wayback_c}")
+    print(f"  With price:           {price_c}")
+    print(f"  With symptoms:        {symptom_c}")
+    print(f"  With install info:    {install_c}")
+    print(f"  With video:           {video_c}")
+    print(f"  With compat models:   {compat_c}")
+
+    # Build and save model -> parts relational map
+    model_map  = build_model_part_map(all_parts)
+    map_path   = data_dir / "model_part_map.json"
+    map_path.write_text(json.dumps(model_map, indent=2, ensure_ascii=False), encoding="utf-8")
+    total_refs = sum(len(v["parts"]) for v in model_map.values())
+    print(f"\nSaved model_part_map.json: {len(model_map)} models, {total_refs} part references")
     print(f"\nNext: python embed_and_index.py")
 
 

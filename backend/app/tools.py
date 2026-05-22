@@ -15,6 +15,60 @@ _faiss_metadata: list[dict] = []
 _st_model       = None
 _DATA_DIR = Path(__file__).parent / "data"
 
+# ── Relational maps (loaded once at startup) ──────────────────────────────────
+# model_part_map: {model_number: {"category": str, "parts": [ps_num, ...]}}
+# symptom_part_map: {"category|symptom": [ps_num, ...]}
+# part_type_map: {"category|type": {"parts": [...], "brands": [...]}}
+# brand_appliance_map: {"Brand|appliance": {"parts": [...], ...}}
+_model_part_map: dict[str, dict] = {}
+_symptom_part_map: dict[str, list] = {}
+_part_type_map: dict[str, dict] = {}
+_brand_appliance_map: dict[str, dict] = {}
+_model_map_loaded = False
+_relational_maps_loaded = False
+
+
+def _load_model_map() -> None:
+    global _model_part_map, _model_map_loaded
+    if _model_map_loaded:
+        return
+    _model_map_loaded = True
+    map_path = _DATA_DIR / "model_part_map.json"
+    if not map_path.exists():
+        return
+    try:
+        _model_part_map = json.loads(map_path.read_text(encoding="utf-8"))
+        print(f"[model_map] Loaded {len(_model_part_map)} models")
+    except Exception as e:
+        print(f"[model_map] Load failed: {e}")
+
+
+def _load_relational_maps() -> None:
+    global _symptom_part_map, _part_type_map, _brand_appliance_map, _relational_maps_loaded
+    if _relational_maps_loaded:
+        return
+    _relational_maps_loaded = True
+    for attr, fname in [
+        ("symptom",    "symptom_part_map.json"),
+        ("part_type",  "part_type_map.json"),
+        ("brand",      "brand_appliance_map.json"),
+    ]:
+        path = _DATA_DIR / fname
+        if not path.exists():
+            print(f"[relational] {fname} not found, skipping")
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if attr == "symptom":
+                _symptom_part_map = data
+            elif attr == "part_type":
+                _part_type_map = data
+            else:
+                _brand_appliance_map = data
+            print(f"[relational] Loaded {fname}: {len(data)} keys")
+        except Exception as e:
+            print(f"[relational] Failed to load {fname}: {e}")
+
 
 def _load_faiss() -> bool:
     """Load FAISS index + metadata + ST model on first call. Cached after that."""
@@ -32,10 +86,51 @@ def _load_faiss() -> bool:
         _faiss_metadata = json.loads(meta_path.read_text(encoding="utf-8"))
         _st_model       = SentenceTransformer("all-MiniLM-L6-v2")
         print(f"[FAISS] Loaded {_faiss_index.ntotal} vectors")
+        _load_model_map()
+        _load_relational_maps()
         return True
     except Exception as e:
         print(f"[FAISS] Load failed: {e}")
         return False
+
+
+def _clean_video_url(url: str) -> str:
+    """Return url only if it links to a specific video, not a generic channel page."""
+    if url and "watch?v=" in url:
+        return url
+    return ""
+
+
+def _enrich_parts(ps_list: list[str], limit: int = 8) -> list[dict]:
+    """Enrich a list of PS numbers with full metadata from the FAISS metadata store."""
+    if not ps_list:
+        return []
+    ps_set = set(ps_list[:100])
+    if _faiss_metadata:
+        enriched = [
+            {
+                "part_number":    p["part_number"],
+                "name":           p["name"],
+                "price":          p["price"],
+                "brand":          p["brand"],
+                "category":       p["category"],
+                "image_url":      p["image_url"],
+                "description":    p["description"],
+                "rating":         p.get("rating", 0),
+                "review_count":   p.get("review_count", 0),
+                "symptoms":       p.get("symptoms", []),
+                "install_difficulty": p.get("install_difficulty", ""),
+                "install_time":   p.get("install_time", ""),
+                "video_url":      _clean_video_url(p.get("video_url", "")),
+                "url":            p.get("url", ""),
+            }
+            for p in _faiss_metadata
+            if p.get("part_number") in ps_set
+               and float(p.get("price") or 0) > 0   # exclude zero-price parts
+        ]
+        if enriched:
+            return enriched[:limit]
+    return [{"part_number": pn} for pn in list(ps_set)[:limit]]
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -143,6 +238,82 @@ TOOL_DEFINITIONS = [
             "required": [],
         },
     },
+    {
+        "name": "find_parts_by_symptom",
+        "description": (
+            "Find parts that fix a specific appliance symptom or problem. "
+            "Use this when users describe what is wrong with their appliance, e.g. "
+            "'not making ice', 'leaking water', 'door won't close', 'not draining', "
+            "'noisy', 'not cooling'. More precise than search_catalog for symptom-driven queries."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symptom": {
+                    "type": "string",
+                    "description": "The symptom or problem, e.g. 'not making ice', 'leaking water', 'door won\\'t seal', 'not draining'",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["refrigerator", "dishwasher"],
+                    "description": "Filter by appliance type",
+                },
+            },
+            "required": ["symptom"],
+        },
+    },
+    {
+        "name": "find_parts_by_type",
+        "description": (
+            "Find parts by their component type or category. "
+            "Use when users ask for a specific kind of part, e.g. 'ice makers', "
+            "'door gaskets', 'spray arms', 'water filters', 'drain pumps', 'handles', 'shelves', 'racks'. "
+            "Supports optional brand and appliance category filters."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "part_type": {
+                    "type": "string",
+                    "description": "The type of part, e.g. 'ice makers', 'door gaskets', 'spray arms', 'water filters', 'drain pumps', 'handles', 'shelves', 'dish racks'",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["refrigerator", "dishwasher"],
+                    "description": "Filter by appliance type",
+                },
+                "brand": {
+                    "type": "string",
+                    "description": "Filter by brand, e.g. 'Whirlpool', 'Samsung', 'GE', 'Bosch', 'LG'",
+                },
+            },
+            "required": ["part_type"],
+        },
+    },
+    {
+        "name": "find_parts_by_brand",
+        "description": (
+            "Find all available parts for a specific appliance brand. "
+            "Use when a user mentions their appliance brand without a model number, "
+            "e.g. 'I have a Samsung fridge', 'looking for Bosch dishwasher parts', "
+            "'what GE refrigerator parts do you carry'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": {
+                    "type": "string",
+                    "description": "The appliance brand, e.g. 'Whirlpool', 'Samsung', 'GE', 'LG', 'Bosch', 'Frigidaire', 'Maytag'",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["refrigerator", "dishwasher"],
+                    "description": "Filter by appliance type",
+                },
+            },
+            "required": ["brand"],
+        },
+    },
 ]
 
 
@@ -171,6 +342,8 @@ async def search_catalog(
             if item.get("type", "part") != "part":
                 continue
             if not item.get("part_number"):
+                continue
+            if float(item.get("price") or 0) <= 0:
                 continue
             if category and item.get("category") != category:
                 continue
@@ -285,7 +458,7 @@ def _parse_part_html(html: str, pn: str, url: str) -> dict | None:
             if re.search(r"main|product|primary|hero|ps-main", classes, re.I):
                 result["image_url"] = src
                 break
-    result.setdefault("image_url", f"https://www.partselect.com/assets/images/parts/PS{pn}.jpg")
+    result.setdefault("image_url", "")
 
     # Rating
     if rating_el := soup.find(attrs={"itemprop": "ratingValue"}):
@@ -381,10 +554,68 @@ async def get_part_details(part_number: str) -> dict:
     return {"error": f"Part PS{pn} not found.", "part_number": f"PS{pn}", "url": url}
 
 
+def _parts_from_map(model: str) -> list[dict]:
+    """Look up compatible parts from the local relational map + FAISS metadata."""
+    _load_model_map()
+    entry = _model_part_map.get(model)
+    if not entry:
+        return []
+
+    # Handle both dict format {"parts": [...], "category": str} and legacy list format
+    if isinstance(entry, list):
+        pn_set = set(entry)
+    else:
+        pn_set = set(entry.get("parts", []))
+    if not pn_set:
+        return []
+
+    # Enrich with full metadata from FAISS if available
+    if _faiss_metadata:
+        enriched = [
+            {
+                "part_number":    p["part_number"],
+                "name":           p["name"],
+                "price":          p["price"],
+                "brand":          p["brand"],
+                "category":       p["category"],
+                "image_url":      p.get("image_url", ""),
+                "description":    p["description"],
+                "url":            p.get("url", ""),
+                "rating":         p.get("rating", 0),
+                "review_count":   p.get("review_count", 0),
+                "symptoms":       p.get("symptoms", []),
+                "install_difficulty": p.get("install_difficulty", ""),
+                "install_time":   p.get("install_time", ""),
+                "video_url":      p.get("video_url", ""),
+            }
+            for p in _faiss_metadata
+            if p.get("part_number") in pn_set
+        ]
+        if enriched:
+            return enriched
+
+    # Fallback: return bare part numbers when FAISS isn't loaded yet
+    return [{"part_number": pn} for pn in pn_set]
+
+
 async def check_model_compatibility(model_number: str) -> dict:
     model = model_number.strip().upper()
     url   = f"https://www.partselect.com/Models/{model}/"
 
+    # 1. Local relational map (instant, no network) ───────────────────────────
+    _load_faiss()   # also triggers _load_model_map
+    map_parts = _parts_from_map(model)
+    if map_parts:
+        category = _model_part_map.get(model, {}).get("category", "")
+        return {
+            "model_number":     model,
+            "url":              url,
+            "category":         category,
+            "compatible_parts": map_parts,
+            "_source":          "local_map",
+        }
+
+    # 2. Live PartSelect scrape ────────────────────────────────────────────────
     try:
         async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=STEALTH_HEADERS) as client:
             resp = await client.get(url)
@@ -410,36 +641,45 @@ async def check_model_compatibility(model_number: str) -> dict:
                     result["compatible_parts"].append(part_data)
 
             if not result["compatible_parts"]:
-                # Fall back to FAISS metadata — find parts whose compatible_models_str contains this model
-                if _load_faiss():
-                    faiss_matches = [
-                        {"part_number": p["part_number"], "name": p["name"],
-                         "price": p["price"], "brand": p["brand"],
-                         "category": p["category"], "image_url": p["image_url"],
-                         "description": p["description"]}
-                        for p in _faiss_metadata
-                        if model in p.get("compatible_models_str", "")
-                    ]
-                    if faiss_matches:
-                        result["compatible_parts"] = faiss_matches
-                        result["_source"] = "index"
+                # 3. FAISS full-text fallback ──────────────────────────────────
+                faiss_matches = [
+                    {"part_number": p["part_number"], "name": p["name"],
+                     "price": p["price"], "brand": p["brand"],
+                     "category": p["category"], "image_url": p.get("image_url", ""),
+                     "url": p.get("url", ""), "description": p["description"]}
+                    for p in _faiss_metadata
+                    if model in p.get("compatible_models_str", "")
+                ]
+                if faiss_matches:
+                    result["compatible_parts"] = faiss_matches
+                    result["_source"] = "index"
+                else:
+                    result["note"] = (
+                        f"No parts found for model {model} in our database. "
+                        "Try searching by symptom or part type instead."
+                    )
 
             return result
 
     except Exception as e:
-        # Fall back to FAISS index for compatibility
-        if _load_faiss():
-            matches = [
-                {"part_number": p["part_number"], "name": p["name"],
-                 "price": p["price"], "brand": p["brand"],
-                 "category": p["category"], "image_url": p["image_url"],
-                 "description": p["description"]}
-                for p in _faiss_metadata
-                if model in p.get("compatible_models_str", "")
-            ]
+        # 3. FAISS full-text fallback on network failure ───────────────────────
+        matches = [
+            {"part_number": p["part_number"], "name": p["name"],
+             "price": p["price"], "brand": p["brand"],
+             "category": p["category"], "image_url": p["image_url"],
+             "description": p["description"]}
+            for p in _faiss_metadata
+            if model in p.get("compatible_models_str", "")
+        ]
+        if matches:
             return {"model_number": model, "compatible_parts": matches, "_source": "index"}
 
-        return {"model_number": model, "compatible_parts": [], "error": str(e)}
+        return {
+            "model_number":     model,
+            "compatible_parts": [],
+            "note": f"No compatible parts found in our database for model {model}. "
+                    "Try searching by symptom or part type, or check PartSelect.com directly.",
+        }
 
 
 def manage_cart(
@@ -474,28 +714,173 @@ def manage_cart(
     return {"message": action_msg, "items": cart, "total": total, "item_count": len(cart)}
 
 
+def find_parts_by_symptom(symptom: str, category: Optional[str] = None) -> list:
+    """Find parts that fix a specific symptom using the relational symptom map."""
+    _load_faiss()
+    _load_relational_maps()
+    if not _symptom_part_map:
+        # Fallback to FAISS search if map unavailable
+        return []
+
+    symptom_lower = symptom.lower()
+    matched_parts: list[str] = []
+    matched_keys: list[str] = []
+
+    for key, ps_list in _symptom_part_map.items():
+        parts = key.split("|", 1)
+        key_cat = parts[0] if len(parts) > 1 else ""
+        key_sym = parts[1].lower() if len(parts) > 1 else parts[0].lower()
+
+        if category and key_cat and key_cat != category:
+            continue
+
+        # Match using word-boundary regex to avoid partial-word false positives
+        if re.search(rf"\b({'|'.join(re.escape(w) for w in symptom_lower.split() if len(w) > 3)})\b", key_sym):
+            matched_keys.append(key)
+            matched_parts.extend(ps_list)
+        elif symptom_lower in key_sym or key_sym in symptom_lower:
+            matched_keys.append(key)
+            matched_parts.extend(ps_list)
+
+    if not matched_parts:
+        return []
+
+    seen: set[str] = set()
+    unique = []
+    for ps in matched_parts:
+        if ps not in seen:
+            seen.add(ps)
+            unique.append(ps)
+
+    results = _enrich_parts(unique, limit=8)
+    return results
+
+
+def find_parts_by_type(
+    part_type: str,
+    category: Optional[str] = None,
+    brand: Optional[str] = None,
+) -> list:
+    """Find parts by component type using the relational part_type map."""
+    _load_faiss()
+    _load_relational_maps()
+    if not _part_type_map:
+        return []
+
+    part_type_lower = part_type.lower()
+    matched_parts: list[str] = []
+
+    for key, entry in _part_type_map.items():
+        parts = key.split("|", 1)
+        key_cat  = parts[0] if len(parts) > 1 else ""
+        key_type = parts[1].lower() if len(parts) > 1 else parts[0].lower()
+
+        if category and key_cat and key_cat != category:
+            continue
+        if not (part_type_lower in key_type or key_type in part_type_lower):
+            continue
+
+        ps_list = entry.get("parts", []) if isinstance(entry, dict) else list(entry)
+
+        if brand and isinstance(entry, dict):
+            entry_brands = [b.lower() for b in entry.get("brands", [])]
+            if brand.lower() not in entry_brands:
+                continue
+            # Filter ps_list to only parts matching the brand in metadata
+            if _faiss_metadata:
+                brand_set = {
+                    p["part_number"]
+                    for p in _faiss_metadata
+                    if p.get("brand", "").lower() == brand.lower()
+                }
+                ps_list = [ps for ps in ps_list if ps in brand_set]
+
+        matched_parts.extend(ps_list)
+
+    if not matched_parts:
+        return []
+
+    seen: set[str] = set()
+    unique = []
+    for ps in matched_parts:
+        if ps not in seen:
+            seen.add(ps)
+            unique.append(ps)
+
+    return _enrich_parts(unique, limit=8)
+
+
+def find_parts_by_brand(brand: str, category: Optional[str] = None) -> list:
+    """Find parts for a specific brand using the relational brand_appliance map."""
+    _load_faiss()
+    _load_relational_maps()
+    if not _brand_appliance_map:
+        return []
+
+    brand_lower = brand.lower()
+    matched_parts: list[str] = []
+
+    for key, entry in _brand_appliance_map.items():
+        parts = key.split("|", 1)
+        key_brand = parts[0].lower() if parts else ""
+        key_cat   = parts[1] if len(parts) > 1 else ""
+
+        if key_brand != brand_lower:
+            continue
+        if category and key_cat and key_cat != category:
+            continue
+
+        ps_list = entry.get("parts", []) if isinstance(entry, dict) else list(entry)
+        matched_parts.extend(ps_list)
+
+    if not matched_parts:
+        return []
+
+    seen: set[str] = set()
+    unique = []
+    for ps in matched_parts:
+        if ps not in seen:
+            seen.add(ps)
+            unique.append(ps)
+
+    return _enrich_parts(unique[:200], limit=8)
+
+
 def get_order(order_id: Optional[str] = None) -> dict:
+    """
+    Demo-only: returns sample order data.
+    Real order lookup requires PartSelect account API integration (out of scope for this demo).
+    Claude should always clarify this is example data when presenting it.
+    """
+    demo_note = (
+        "Note: Order lookup is a demo feature showing example data. "
+        "For real order status, visit partselect.com/MyOrders or call 1-888-738-4871."
+    )
     sample_orders = [
         {
-            "order_id": "PS-2024-78432",
+            "order_id": "PS-DEMO-78432",
             "status": "Shipped",
             "tracking_number": "1Z999AA10123456784",
             "carrier": "UPS",
-            "estimated_delivery": "May 23, 2026",
+            "estimated_delivery": "3–5 business days",
             "items": [{"part_number": "PS11752778", "name": "Refrigerator Ice Maker Assembly", "price": 98.75}],
             "order_total": 98.75,
+            "demo": True,
         },
         {
-            "order_id": "PS-2024-77891",
+            "order_id": "PS-DEMO-77891",
             "status": "Delivered",
             "tracking_number": "1Z999AA10123456001",
             "carrier": "UPS",
-            "delivered_date": "May 18, 2026",
+            "delivered_date": "3 days ago",
             "items": [{"part_number": "PS11748360", "name": "Dishwasher Door Latch", "price": 34.20}],
             "order_total": 34.20,
+            "demo": True,
         },
     ]
     if order_id:
         order = next((o for o in sample_orders if o["order_id"] == order_id), None)
-        return order if order else {"error": f"Order {order_id} not found"}
-    return {"recent_orders": sample_orders}
+        if order:
+            return {**order, "demo_note": demo_note}
+        return {"error": f"Order {order_id} not found", "demo_note": demo_note}
+    return {"recent_orders": sample_orders, "demo_note": demo_note}

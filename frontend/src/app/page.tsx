@@ -10,9 +10,12 @@ import CartSidebar from '@/components/CartSidebar'
 const TOOL_LABELS: Record<string, string> = {
   search_catalog:            'Searching catalog…',
   get_part_details:          'Fetching part details…',
-  check_model_compatibility: 'Checking compatibility…',
+  check_model_compatibility: 'Checking model compatibility…',
   manage_cart:               'Updating cart…',
   get_order:                 'Looking up order…',
+  find_parts_by_symptom:     'Finding parts for that symptom…',
+  find_parts_by_type:        'Browsing part types…',
+  find_parts_by_brand:       'Looking up brand parts…',
 }
 
 const SUGGESTED_AFTER: string[] = [
@@ -48,6 +51,21 @@ export default function HomePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef    = useRef<HTMLTextAreaElement>(null)
   const startTimeRef   = useRef<number>(0)
+
+  // Load cart from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('partselect_cart')
+      if (saved) setCartItems(JSON.parse(saved))
+    } catch { /* ignore corrupt storage */ }
+  }, [])
+
+  // Persist cart to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('partselect_cart', JSON.stringify(cartItems))
+    } catch { /* ignore quota errors */ }
+  }, [cartItems])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -139,6 +157,8 @@ export default function HomePage() {
             : history
 
         let fullContent = ''
+        let partsBuffer: Part[] | null = null
+        let textStarted = false
 
         for await (const chunk of streamChat(contextHistory, sessionId.current)) {
           if (chunk.type === 'tool_call') {
@@ -147,14 +167,42 @@ export default function HomePage() {
             setToolStatus('')
             fullContent += chunk.content as string
             setMessages((prev) =>
-              prev.map((m) => (m.id === asstId ? { ...m, content: fullContent } : m))
+              prev.map((m) => {
+                if (m.id !== asstId) return m
+                // Flush buffered parts together with the first text chunk
+                if (!textStarted && partsBuffer) {
+                  textStarted = true
+                  const flushed = partsBuffer
+                  partsBuffer = null
+                  return { ...m, content: fullContent, parts: flushed }
+                }
+                textStarted = true
+                return { ...m, content: fullContent }
+              })
             )
+          } else if (chunk.type === 'cart_sync' && Array.isArray(chunk.content)) {
+            // Claude called manage_cart — sync frontend cart to match server state
+            setCartItems(chunk.content as CartItem[])
           } else if (chunk.type === 'parts' && Array.isArray(chunk.content)) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === asstId ? { ...m, parts: chunk.content as Part[] } : m))
-            )
+            if (textStarted) {
+              // Text already flowing — attach immediately
+              setMessages((prev) =>
+                prev.map((m) => (m.id === asstId ? { ...m, parts: chunk.content as Part[] } : m))
+              )
+            } else {
+              // Hold until first text chunk so context always precedes cards
+              partsBuffer = chunk.content as Part[]
+            }
           } else if (chunk.type === 'done') {
             setToolStatus('')
+            // Flush any parts that arrived but text never came (edge case)
+            if (partsBuffer) {
+              const flushed = partsBuffer
+              partsBuffer = null
+              setMessages((prev) =>
+                prev.map((m) => (m.id === asstId ? { ...m, parts: flushed } : m))
+              )
+            }
             const elapsed = (Date.now() - startTimeRef.current) / 1000
             setMessages((prev) =>
               prev.map((m) => (m.id === asstId ? { ...m, responseTime: elapsed } : m))
@@ -225,65 +273,56 @@ export default function HomePage() {
     <div className="flex flex-col h-screen bg-white overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <header className="bg-white border-b border-gray-200 px-6 py-3 shrink-0 flex items-center justify-between">
-        {/* Logo — matches partselect.com branding */}
+      <header className="bg-white border-b border-gray-100 px-5 py-2.5 shrink-0 flex items-center justify-between">
         <a
           href="https://www.partselect.com"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2.5 hover:opacity-90 transition-opacity"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
         >
-          <div className="w-9 h-9 rounded-lg bg-brand-orange flex items-center justify-center shrink-0 shadow-sm">
-            <svg viewBox="0 0 24 24" className="w-5 h-5 text-white fill-current">
-              <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+          <div className="w-8 h-8 rounded-lg bg-brand-orange flex items-center justify-center shrink-0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
             </svg>
           </div>
-          <div>
-            <span className="text-base sm:text-lg font-extrabold text-gray-900 tracking-tight">PartSelect</span>
-            <p className="hidden sm:block text-[10px] text-gray-400 leading-none mt-0.5">Official Appliance Parts</p>
-          </div>
+          <span className="text-[15px] font-bold text-gray-900 tracking-tight">PartSelect</span>
         </a>
 
-        {/* Right */}
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-1">
           <a
             href="tel:18887384871"
-            className="flex items-center gap-1 text-brand-orange font-bold text-sm hover:text-brand-orange-dark transition-colors"
-            aria-label="Call 1-888-738-4871"
+            className="hidden sm:flex items-center gap-1 text-[13px] text-gray-500 hover:text-brand-orange transition-colors px-2 py-1.5 rounded-lg hover:bg-gray-50 mr-1"
           >
             <Phone className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">1-888-738-4871</span>
+            1-888-738-4871
           </a>
-
-          <div className="flex items-center gap-1">
-            {messages.length > 0 && (
-              <button
-                onClick={clearChat}
-                title="Clear conversation"
-                className="p-2 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-gray-100"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
+          {messages.length > 0 && (
             <button
-              onClick={() => setCartOpen(true)}
-              className="relative p-2 text-gray-500 hover:text-brand-orange transition-colors rounded-lg hover:bg-gray-100"
-              aria-label="Open cart"
+              onClick={clearChat}
+              title="New conversation"
+              className="p-2 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-gray-100"
             >
-              <ShoppingCart className="w-5 h-5" />
-              {totalCartItems > 0 && (
-                <span className="absolute -top-1 -right-1 bg-brand-orange text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                  {totalCartItems > 9 ? '9+' : totalCartItems}
-                </span>
-              )}
+              <Trash2 className="w-4 h-4" />
             </button>
-          </div>
+          )}
+          <button
+            onClick={() => setCartOpen(true)}
+            className="relative p-2 text-gray-500 hover:text-brand-orange transition-colors rounded-lg hover:bg-gray-100"
+            aria-label="Open cart"
+          >
+            <ShoppingCart className="w-5 h-5" />
+            {totalCartItems > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 bg-brand-orange text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 leading-none">
+                {totalCartItems > 9 ? '9+' : totalCartItems}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
       {/* ── Messages ───────────────────────────────────────────────────────── */}
       <main className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-2xl mx-auto">
           {messages.length === 0 ? (
             <WelcomeScreen
               onSelect={(q) => sendMessage(q)}
@@ -292,7 +331,7 @@ export default function HomePage() {
             />
           ) : (
             <>
-              <div className="py-4">
+              <div className="pt-6 pb-2">
                 {messages.map((msg, idx) => (
                   <MessageBubble
                     key={msg.id}
@@ -308,14 +347,14 @@ export default function HomePage() {
                 ))}
               </div>
 
-              {/* Suggested follow-up chips */}
+              {/* Suggested follow-ups */}
               {showSuggestions && !isLoading && lastAsstHasContent && (
-                <div className="flex gap-2 flex-wrap px-4 pb-4 animate-fade-in">
+                <div className="flex gap-2 flex-wrap pl-14 pr-4 pb-4 animate-fade-in">
                   {SUGGESTED_AFTER.map((s) => (
                     <button
                       key={s}
                       onClick={() => { setShowSuggestions(false); sendMessage(s) }}
-                      className="text-xs font-medium border border-brand-orange/40 text-brand-orange bg-orange-50 hover:bg-brand-orange hover:text-white px-3 py-1.5 rounded-full transition-all whitespace-nowrap"
+                      className="text-xs font-medium border border-gray-200 text-gray-600 bg-white hover:border-brand-orange hover:text-brand-orange px-3 py-1.5 rounded-full transition-all whitespace-nowrap shadow-sm"
                     >
                       {s}
                     </button>
@@ -323,7 +362,7 @@ export default function HomePage() {
                 </div>
               )}
 
-              <div ref={messagesEndRef} className="h-4" />
+              <div ref={messagesEndRef} className="h-6" />
             </>
           )}
         </div>
@@ -331,8 +370,8 @@ export default function HomePage() {
 
       {/* ── Input ──────────────────────────────────────────────────────────── */}
       <div className="bg-white border-t border-gray-100 px-4 pt-3 pb-safe shrink-0">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
-          <div className="flex items-end gap-2 bg-white border border-gray-300 rounded-2xl px-4 py-3 focus-within:border-brand-orange focus-within:ring-1 focus-within:ring-brand-orange/30 transition-all shadow-sm">
+        <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
+          <div className="flex items-end gap-2.5 bg-white border border-gray-200 rounded-2xl px-4 py-3 focus-within:border-gray-400 focus-within:ring-2 focus-within:ring-gray-100 transition-all shadow-sm">
             <textarea
               ref={textareaRef}
               value={input}
@@ -341,20 +380,22 @@ export default function HomePage() {
               placeholder="Ask about refrigerator or dishwasher parts…"
               rows={1}
               disabled={isLoading}
-              className="flex-1 resize-none bg-transparent text-sm text-gray-900 placeholder-gray-400 focus:outline-none scrollbar-thin leading-relaxed disabled:opacity-60"
+              className="flex-1 resize-none bg-transparent text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none scrollbar-thin leading-relaxed disabled:opacity-50"
               style={{ maxHeight: '120px' }}
             />
             <button
               type="submit"
               disabled={!input.trim() || isLoading}
-              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:bg-gray-200 disabled:cursor-not-allowed bg-brand-orange hover:bg-brand-orange-dark active:scale-95"
+              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:bg-gray-200 disabled:cursor-not-allowed bg-gray-900 hover:bg-gray-700 active:scale-95"
               aria-label="Send"
             >
               <ArrowUp className="w-4 h-4 text-white" />
             </button>
           </div>
-          <p className="text-center text-xs text-gray-400 mt-2">
-            Specialised in refrigerator &amp; dishwasher parts · Always verify at PartSelect.com
+          <p className="text-center text-[11px] text-gray-400 mt-2">
+            Specialised in refrigerator &amp; dishwasher parts · Always verify at{' '}
+            <a href="https://www.partselect.com" target="_blank" rel="noopener noreferrer"
+              className="hover:text-gray-600 transition-colors">PartSelect.com</a>
           </p>
         </form>
       </div>
