@@ -164,6 +164,113 @@ If any scene doesn't produce good results, use these alternatives:
 
 ---
 
+## System Design
+
+### The core idea: thin tools, smart agent
+
+The central decision was to make Claude the reasoning layer and keep every tool a minimal data accessor. There is no routing logic, no intent classifier, no decision tree. Claude reads the user's message, picks the right tool from a set of 8, and composes the answer from the result.
+
+```
+User message (any form)
+        │
+        ▼
+  Claude claude-sonnet-4-6  ← system prompt + 8 tool definitions
+        │
+   picks one or more tools
+        │
+   ┌────┴────────────────────────────────────────────┐
+   ▼        ▼           ▼          ▼         ▼       ▼
+search   get_part   check_model  find_by_  manage  get_order
+catalog  details    compat.      symptom/  cart
+                                 type/brand
+```
+
+New query types are handled without new code. A new appliance category means scraping and re-indexing — zero changes to agent logic.
+
+---
+
+### Request flow
+
+```
+Browser (Next.js)
+    │
+    │  POST /chat  { messages[], session_id }
+    ▼
+FastAPI  ──► rate limiter (20 req / 60 s)  ──► session tracker (2 hr TTL)
+    │
+    ▼
+run_agent()  ──►  Claude API  (tool-use loop)
+                       │
+              ┌────────┴────────────────────┐
+              │  Tool result                │  Final text
+              ▼                             ▼
+         execute_tool()             stream word chunks
+              │                     via SSE → browser
+         emit SSE events
+         (parts / cart_sync)
+```
+
+1. The browser POSTs the full message history and a session ID
+2. FastAPI checks the rate limit, then hands off to `run_agent()`
+3. Claude receives the system prompt, conversation history, and all 8 tool definitions in one API call
+4. If Claude returns tool calls, `execute_tool()` runs them and the results are appended to the conversation — the loop continues until Claude returns plain text
+5. Text is streamed word-by-word as SSE. Tool results that contain parts or cart state emit their own typed SSE events
+
+---
+
+### Data layer: two-level retrieval
+
+Every query hits at most two layers:
+
+| Layer | What it handles | How |
+|-------|----------------|-----|
+| **Relational maps** | Structured lookups — model number, symptom, part type, brand | Pre-built JSON loaded at startup, O(1) key lookup |
+| **FAISS semantic index** | Vague or general queries | `all-MiniLM-L6-v2` embeddings (384-dim), `IndexFlatIP` cosine similarity, top-5 in <50 ms |
+| **Live scrape + Wayback** | Single part deep-dive | Fetch PartSelect page → Wayback Machine fallback for CDN-blocked responses |
+
+The relational maps were built from 6,025 scraped parts and cross-referenced against PartSelect's XML sitemaps (101,843 part URLs, 287,259 model URLs). Semantic search handles vague queries; the maps handle structured ones.
+
+---
+
+### Data sourcing: why Wayback Machine
+
+PartSelect's CDN (Akamai) blocks direct scraping. All part data — names, prices, symptoms, compatible models, ratings — was sourced from the **Internet Archive Wayback Machine**:
+
+- **Discovery:** Wayback CDX API enumerates all archived PartSelect pages
+- **Fetching:** Each part fetched as a 2022–2024 snapshot (real HTML with full metadata)
+- **Images:** The `/image/{part_number}` proxy endpoint queries CDX for cached part images, bypassing CDN hotlink protection at runtime
+
+---
+
+### SSE event contract
+
+The backend and frontend communicate exclusively through five typed SSE events. The frontend is stateless relative to the agent — it just reacts to events.
+
+| Event | Payload | Frontend effect |
+|-------|---------|-----------------|
+| `tool_call` | Tool name | Show status label ("Searching catalog…") |
+| `text` | Word chunk | Append to assistant message |
+| `parts` | `Part[]` | Hold in buffer until first text, then render cards |
+| `cart_sync` | `CartItem[]` | Replace entire cart state atomically |
+| `done` | — | Record response time, show follow-up chips |
+
+The **parts buffer** is the key UX decision: product cards are withheld until the first text token arrives so the user always reads context before seeing something to buy.
+
+---
+
+### Technology choices
+
+| Layer | Choice | Reason |
+|-------|--------|--------|
+| AI model | Claude claude-sonnet-4-6 | Best latency/quality ratio for multi-step tool-use loops |
+| Backend | FastAPI (Python) | Native async streaming, richest AI/scraping ecosystem |
+| Vector search | FAISS (local) | No external dependency, zero cold-start latency, sufficient at 6k vectors |
+| Embeddings | all-MiniLM-L6-v2 | Fast, runs locally, strong semantic similarity at 384 dims |
+| Frontend | Next.js 14 App Router | SSE streaming, Tailwind co-location, Vercel-deployable |
+| HTTP client | httpx (async) | Native async, connection pooling for both scraping and Wayback requests |
+
+---
+
 ## Architecture in one sentence
 
 > Claude picks the right tool, the tools return structured data, and SSE streams everything — text, parts, and cart state — to a stateless React frontend.
