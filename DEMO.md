@@ -271,6 +271,192 @@ The **parts buffer** is the key UX decision: product cards are withheld until th
 
 ---
 
+## High Level Design
+
+### Frontend — Next.js 14 App Router
+
+| Component | Responsibility |
+|-----------|----------------|
+| `page.tsx` | Root state: messages, cart, session ID, SSE stream handling, parts buffer |
+| `MessageBubble.tsx` | Renders assistant/user turns — inline markdown, product card rows, tool status labels |
+| `ProductCard.tsx` | Part card: name, part number, brand, rating, price, Add-to-cart, View on PartSelect |
+| `CartSidebar.tsx` | Sliding drawer — quantity controls, subtotal, checkout link |
+| `WelcomeScreen.tsx` | Greeting, appliance filter tabs, suggestion prompts |
+| `ErrorBoundary.tsx` | Catches render errors, shows retry button |
+| `api.ts` | `streamChat()` async generator — parses SSE, surfaces 429 Retry-After |
+
+### Backend — FastAPI (Python 3.11+)
+
+| Route | Purpose |
+|-------|---------|
+| `POST /chat` | Main SSE stream — accepts message history + session ID |
+| `GET /health` | Liveness probe |
+| `GET /image/{part_number}` | Wayback Machine image proxy, process-level cache |
+| `DELETE /cart/{session_id}` | Clear server-side cart |
+
+Middleware: 20 req/60 s sliding rate limit per IP, 2 hr session TTL, configurable CORS, background cleanup every 5 min.
+
+### Agent loop — `claude_client.py`
+
+```
+messages[]
+    │
+    └──► Claude API  (claude-sonnet-4-6, max_tokens=4096)
+              │
+        ┌─────┴──────┐
+        │ tool_uses? │
+        └─────┬──────┘
+       no ◄───┤───► yes
+        │          │
+        │     execute_tool()
+        │          ├── emit tool_call SSE
+        │          ├── emit parts SSE   (search / lookup tools)
+        │          └── emit cart_sync SSE  (manage_cart)
+        │     append tool_results → loop back to Claude
+        │
+    stream final text in ~4-char word chunks
+    emit done SSE
+```
+
+Retry: 2 attempts with 1 s / 3 s backoff on HTTP 429 / 529 from Anthropic.
+
+### 8 tools
+
+| Tool | Trigger | Source | Output |
+|------|---------|--------|--------|
+| `search_catalog` | General keyword | FAISS index | Top 5 parts |
+| `get_part_details` | Part number | Live PartSelect → Wayback | Full part record |
+| `check_model_compatibility` | Model number | Relational map → live scrape | Compatible parts |
+| `find_parts_by_symptom` | Symptom / problem | symptom_part_map → FAISS | Up to 8 parts |
+| `find_parts_by_type` | Component category | part_type_map → FAISS | Up to 8 parts |
+| `find_parts_by_brand` | Brand only | brand_appliance_map → FAISS | Up to 8 parts |
+| `manage_cart` | Add / remove / view | In-memory session store | Cart state + cart_sync SSE |
+| `get_order` | Order ID | Demo fixture | Order record (demo only) |
+
+### Data pipeline (run once to build the index)
+
+```
+XML Sitemaps (101,843 part URLs + 287,259 model URLs)
+      │
+      ▼
+build_from_sitemap.py   →  sitemap_parts.json, sitemap_models.json
+      │
+      ▼
+scrape_parts.py         →  parts_raw.jsonl  (6,025 parts, ~3 hrs)
+      │
+      ▼
+build_relational_index.py  →  symptom / type / model / brand maps
+      │
+      ▼
+embed_and_index.py      →  faiss_index.bin + parts_metadata.json
+                            → copied to backend/app/data/
+```
+
+---
+
+## Design Decisions
+
+### 1. Thin tools, smart agent — not one chain per intent
+
+The rejected approach was to build a dedicated function for every query type (`troubleshoot_appliance`, `get_installation_guide`, etc.). This breaks on queries that weren't anticipated and requires new code for every new intent.
+
+The chosen approach: Claude is the reasoning layer. Tools are minimal data accessors — they return JSON and nothing else. Claude decides how to compose them. A query like "my Whirlpool fridge is leaking and I want to know the install difficulty of the top fix" requires no new code — Claude calls `find_parts_by_symptom` then `get_part_details` in sequence.
+
+### 2. Two-tier retrieval — relational maps first, FAISS second
+
+Structured queries (model number, brand, exact symptom) are answered by pre-built JSON maps with O(1) lookup. Semantic FAISS search is reserved for vague or general queries. This keeps structured results deterministic and fast while still handling natural language inputs well.
+
+FAISS over a hosted vector DB (Pinecone, Weaviate): no external dependency, no API key, no cold-start, sub-50 ms queries at 6k vectors. At this scale, a local IndexFlatIP is faster and simpler than a managed service.
+
+### 3. SSE over WebSocket
+
+Chat is unidirectional (server → client). SSE is simpler than WebSocket for this: it reconnects automatically, works through HTTP proxies and CDNs, and maps directly to a FastAPI `StreamingResponse`. No additional library needed.
+
+### 4. Parts buffer — cards after text, always
+
+Product cards are held in a frontend buffer until the first text token arrives. Without this, cards render before the explanation: the user sees prices before they understand what the parts are or whether they're relevant. The buffer enforces: context first, purchase options second.
+
+### 5. cart_sync SSE — server is authoritative on Claude-managed cart
+
+When the user clicks "Add to cart" on a card, it's a client-side state update only — fast, no round-trip. When Claude calls `manage_cart` (e.g., "add the water inlet valve"), the server emits a `cart_sync` event with the full updated cart. The frontend replaces its state from the server's version. This keeps both paths consistent without a polling loop.
+
+### 6. Wayback Machine as primary data source
+
+PartSelect's CDN (Akamai) blocks direct scraping with aggressive bot detection. The Wayback Machine CDX API provides enumeration of all archived pages and direct access to 2022–2024 snapshots with full HTML — names, prices, symptoms, compatible models, ratings, installation data. The same Wayback proxy is used at runtime for the image endpoint.
+
+### 7. Scope enforcement in the system prompt, not in code
+
+The agent only handles refrigerator and dishwasher parts. This rule lives in the system prompt as a plain instruction: "Only answer questions about refrigerator and dishwasher parts." Claude enforces it. There is no code-level routing, no topic classifier, no allowlist. The rule is easy to change and the agent applies it to edge cases intelligently.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Version | Why this, not the alternative |
+|-------|-----------|---------|-------------------------------|
+| AI model | Claude claude-sonnet-4-6 | — | Best latency/quality for multi-step tool-use; streaming API; native tool-use protocol |
+| Backend framework | FastAPI | latest | Native async, `StreamingResponse` for SSE, automatic OpenAPI docs, richest Python AI/scraping ecosystem |
+| LLM SDK | Anthropic Python SDK | latest | Official SDK; handles tool-use message construction, retries, streaming |
+| Vector search | FAISS (`IndexFlatIP`) | 1.7.x | Local, zero dependencies, <50 ms at 6k vectors — no need for Pinecone/Weaviate at this scale |
+| Embeddings | all-MiniLM-L6-v2 | — | 384-dim, runs locally via sentence-transformers, strong semantic similarity, no API calls |
+| HTTP client | httpx (async) | latest | Native async, connection pooling — used for both Wayback scraping and Anthropic retries |
+| HTML parsing | BeautifulSoup4 | latest | Robust parsing of archived PartSelect HTML with inconsistent markup |
+| Frontend framework | Next.js 14 App Router | 14.2 | SSE streaming via `fetch` ReadableStream, Tailwind co-location, Vercel-deployable |
+| Styling | Tailwind CSS | 3.4 | Utility-first, co-located with components, no CSS file management |
+| Icons | Lucide React | 0.344 | Consistent, lightweight, tree-shakeable |
+| Runtime | Python 3.11+ / Node 18+ | — | Python 3.11 `asyncio` performance improvements; Node 18 native fetch |
+
+---
+
+## Evaluation Metrics
+
+### Functional correctness
+
+| Metric | How to measure | Target |
+|--------|---------------|--------|
+| **Tool selection accuracy** | Given a query with a known correct tool (e.g. model number → `check_model_compatibility`), does the agent pick it? | >95% on a labelled eval set of 50 queries |
+| **Part relevance** | For symptom and keyword queries, are the returned parts actually relevant to the user's problem? | Human rating ≥4/5 on a 20-query sample |
+| **Model compatibility recall** | For a model number in the index, does the response include the known compatible parts? | 100% for models with ≥5 parts in the map |
+| **Scope adherence** | Does the agent correctly decline queries outside refrigerator/dishwasher parts? | 100% on a set of 20 off-topic queries |
+| **Cart accuracy** | When asked to add a specific part, does the correct part number appear in the cart? | 100% — verifiable from `cart_sync` payload |
+
+### Performance
+
+| Metric | Measurement | Observed |
+|--------|-------------|---------|
+| **Time to first text token** | From POST /chat to first `text` SSE event | ~2–3 s (includes Claude API round-trip + tool execution) |
+| **Total response time** | POST to `done` SSE event | Shown in UI after each response (bottom-left of message) |
+| **FAISS query latency** | Time inside `_faiss_index.search()` | <50 ms for k=50 over 6,025 vectors |
+| **Relational map lookup** | Time for key lookup in symptom/model/brand maps | <1 ms (in-memory dict) |
+| **Wayback image load** | First-load vs. cached via `_img_cache` | First: 2–8 s; cached: <5 ms |
+| **Cold start** | First query after backend restart (loads FAISS + ST model) | ~3–5 s |
+
+### Coverage
+
+| Dimension | Count |
+|-----------|-------|
+| Parts indexed | 6,025 |
+| Appliance models mapped | 10,325 |
+| Symptom keys | 72 |
+| Part type keys | 87 |
+| Brand × appliance keys | 77 |
+| Top brands | GE (2,912 parts), Whirlpool (1,122), Frigidaire (1,029), Samsung (377), Bosch (284) |
+
+**Known gaps:** Dishwasher parts are 19% of the index (mirrors the sitemap distribution). Rating/install-difficulty data is sparse (~3% of parts). Prices are from 2022–2024 snapshots and not real-time.
+
+### Robustness
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Anthropic API rate-limited (429) | 2 retries with 1 s / 3 s backoff; user sees error message after exhausting retries |
+| Wayback Machine unavailable | `get_part_details` falls back to FAISS metadata; returns partial data with no error |
+| Model number not in index | Falls back to live PartSelect scrape; if blocked, returns graceful "not found" message |
+| Part number not in index | `get_part_details` attempts live scrape then Wayback; only fails if both are unavailable |
+| Client rate-limited (429) | Frontend surfaces `Retry-After` header value in error message |
+| History too long (>100 msgs) | Backend returns 400; frontend shows error with retry button |
+
+---
+
 ## Architecture in one sentence
 
 > Claude picks the right tool, the tools return structured data, and SSE streams everything — text, parts, and cart state — to a stateless React frontend.
