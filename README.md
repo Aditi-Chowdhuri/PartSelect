@@ -140,6 +140,7 @@ python embed_and_index.py
 | Rating data sparse | ~3% of parts have ratings. Not consistently published on source pages. |
 | In-memory cart | Cart is lost on server restart. Frontend localStorage provides client-side persistence. |
 | Prices not real-time | Scraped at index time (2022–2024 Wayback snapshots). |
+| No PartSelect cart sync | PartSelect has no public cart API. Cart lives in the chatbot only. The best handoff is opening each item's PartSelect product page so the user can add it there with one click. |
 
 ---
 

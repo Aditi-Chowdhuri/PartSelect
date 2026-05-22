@@ -282,6 +282,7 @@ User types: "My Whirlpool fridge ice maker is not working"
 | Images via Wayback | PartSelect CDN blocks hotlinking; Wayback images may occasionally 404 |
 | Rating/install data sparse | ~3% of parts have ratings; not consistently published on source pages |
 | Prices may drift | Scraped at index time; not real-time |
+| No PartSelect cart sync | PartSelect exposes no public cart API, so items added in the chatbot cannot be pushed to the PartSelect website cart automatically. Best achievable handoff: open each item's product page (`part.url`) in a new tab so the user adds it on PartSelect directly. |
 
 ---
 
