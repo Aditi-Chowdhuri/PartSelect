@@ -108,17 +108,43 @@ The retrieval is two-tier. Structured queries — model numbers, symptom categor
 
 ---
 
-## Slide 4 — Data
+## Tech Stack
+
+The frontend is Next.js 14 with TypeScript and Tailwind CSS. The backend is FastAPI in Python. The two talk over server-sent events — FastAPI streams every token and every tool result as a typed event, and Next.js renders each one as it arrives.
+
+For the AI layer, I'm using Anthropic's Python SDK directly — specifically the streaming tool-use API. Claude claude-sonnet-4-6 is the model. No LangChain, no agent framework sitting between me and the model. The tool-use loop is about 40 lines of Python — send the message, check if Claude wants to call a tool, call it, append the result, repeat until Claude writes a final response.
+
+For retrieval, the semantic index is FAISS — Facebook's vector similarity library — with embeddings from `all-MiniLM-L6-v2`, a lightweight sentence transformer that runs entirely on CPU. The relational lookups are plain Python dictionaries loaded from JSON at startup. Redis and Postgres are deliberately absent — this is a stateless service with no infrastructure dependencies beyond the Anthropic API key.
+
+The scraper is pure Python — `httpx` for async requests, `BeautifulSoup` for HTML parsing, and the Wayback Machine's CDX API as the data source.
+
+---
+
+## Data Scraping
 
 Getting the data was the hardest engineering problem.
 
-PartSelect has aggressive CDN protection — direct scraping is blocked. The solution was the Internet Archive's Wayback Machine. Their CDX API lets you enumerate every archived PartSelect part URL, and then fetch HTML snapshots from 2022 to 2024. Each snapshot has the full product data: name, price, description, symptoms it fixes, compatible models, install difficulty.
+PartSelect has aggressive CDN protection — Akamai blocks any automated access. You can't just crawl the site. The solution was the Internet Archive's Wayback Machine. They have a CDX API — essentially a queryable index of every page they've ever archived. I used it to enumerate all 101,000 PartSelect part URLs from the sitemap, then fetched HTML snapshots from 2022 to 2024 for each refrigerator and dishwasher part.
 
-That's how I built 6,025 parts with rich metadata without a data partnership.
+Each archived page has everything: part name, price, description, the list of symptoms it fixes, every compatible appliance model, install difficulty, and ratings. That's 6,025 parts with rich structured metadata — built entirely from archived HTML, no data partnership needed.
 
-From the raw HTML I built four relational maps — symptom to parts, part type to parts, model to parts, brand to parts. Then I embedded every part name and description into a 384-dimensional vector space using a sentence transformer model, and indexed those in FAISS for semantic search.
+After scraping, I ran a build step that turns the raw data into four relational maps — symptom to parts, part type to parts, model number to parts, and brand to parts. Then a separate indexing step embeds every part's name and description into vectors and loads them into FAISS. The whole pipeline takes about three hours to run and produces the five files the backend loads at startup.
 
-The whole pipeline runs locally. No OpenAI, no external vector database, no API keys.
+The same Wayback proxy is also used at runtime. When someone asks for a part's full details and PartSelect's CDN blocks the live request, the agent falls back to the archived version automatically.
+
+---
+
+## Agentic Framework — How Claude Decides Which Tool to Use
+
+This is where it gets interesting, because there is no framework. There's no routing logic, no intent classifier, no if-else tree. Claude makes the decision.
+
+Here's how it works. At the start of every conversation, I give Claude a system prompt that describes the eight tools — what each one does, what parameters it takes, and when to use it. That's the entire instruction. When a message comes in, Claude reads it, reasons about what the customer is trying to do, and picks the tool that fits. If no tool fits, it writes a response directly.
+
+The Anthropic API has first-class support for this — it's called tool use. You pass a list of tool definitions alongside the message, and Claude returns either a tool call with structured arguments, or a text response. My backend checks which one came back, executes the tool if needed, appends the result to the conversation, and sends everything back to Claude. That loop runs until Claude decides it has enough information to write a final answer.
+
+What makes this powerful is that Claude can compose tools. If you ask "find me an ice maker for my Whirlpool model and add the cheapest one to my cart," Claude calls `check_model_compatibility` first, gets the list of parts, identifies the cheapest ice maker, then calls `manage_cart` with that part. No special-case code for that multi-step flow — it just reasons its way through it.
+
+A few concrete examples of how Claude picks: if the message contains a part number like PS8746671, Claude calls `get_part_details`. If it contains a model number, it calls `check_model_compatibility`. If it's a symptom like "fridge is leaking," it calls `find_parts_by_symptom`. If it's vague — "I need something for my old GE" — it calls `search_catalog` which hits the FAISS index. If someone says "add it to my cart," it calls `manage_cart`. Claude infers the intent from the message, the same way a person would.
 
 ---
 
