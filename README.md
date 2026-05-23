@@ -1,5 +1,7 @@
 # PartSelect Chat Agent
 
+**Live demo:** https://part-select.vercel.app
+
 An AI-powered chat assistant for finding refrigerator and dishwasher parts on PartSelect.com. Customers describe a symptom, provide a model number, or search by brand — the agent finds the right part, explains it, and adds it to cart.
 
 Built on a Claude claude-sonnet-4-6 tool-use agent loop with a local FAISS vector index over 6,025 real scraped parts.
