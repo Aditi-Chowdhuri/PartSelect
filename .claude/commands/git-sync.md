@@ -1,0 +1,1 @@
+Check if git is fully up to date. Run git status and git log --oneline -5. If there are uncommitted changes or untracked files that belong to the project, stage and commit them with a clear message. If local commits are ahead of origin/main, push them. Report what was committed and pushed, or confirm everything is already clean.
