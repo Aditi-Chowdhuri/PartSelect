@@ -2,20 +2,63 @@
 
 Generic prompt sequence for any AI-powered data pipeline + insights + dashboard case study.
 Replace bracketed values before pasting. Parallel steps are marked — open a second Claude session and run both at the same time.
+Designed for a 4-hour build + 1-hour live presentation.
 
 ---
 
-## BEFORE YOU START — Manual Step (Required)
+## BEFORE YOU START — How to Scrape Any Website (Read This First)
 
-Open the data source website in Chrome. Open DevTools → Network tab → XHR/Fetch filter. Trigger a search or page load that returns the data you need to scrape. Find the JSON response. Right-click the request → Copy as cURL.
+Most people waste an hour trying BeautifulSoup on a JavaScript-rendered page and wonder why they get nothing. Follow this decision tree every time.
 
-You need four things before running any prompt:
-1. The full cURL command (URL + headers + body)
-2. A sample JSON response (paste the raw text)
-3. Whether it paginates and what field controls the page (look for: page, offset, cursor, total, nextPageToken)
-4. Any auth headers (Authorization, x-api-key, cookie) — note if they expire
+### Step A — Check if the data is in the HTML source (30 seconds)
+Right-click the page → View Page Source (not Inspect — actual source). Press Ctrl+F and search for one piece of data you can see on screen (e.g. a contractor name, a price, a company name).
 
-Do not run Prompt 1 until you have all four.
+- **If you find it in the source**: BeautifulSoup works. Go to Step D.
+- **If you do not find it**: The page is JavaScript-rendered. The data comes from an API call. Go to Step B.
+
+### Step B — Find the API call in DevTools (2 minutes — do this first, always)
+1. Open Chrome DevTools (F12) → Network tab
+2. Click the **Fetch/XHR** filter button
+3. **Hard refresh** the page (Ctrl+Shift+R) — this clears old requests
+4. Interact with the page: run a search, click a filter, scroll to trigger load
+5. Watch the Network tab — look for requests that return JSON (icon shows `{}`)
+6. Click each one and check the **Preview** tab — find the one with your actual data
+7. Right-click that request → **Copy → Copy as cURL (bash)**
+
+What to capture:
+- The full URL (including all query params)
+- All request headers (especially: `Authorization`, `x-api-key`, `x-auth-token`, `Cookie`, `Referer`, `Origin`)
+- The request body if it is a POST (click the **Payload** tab)
+- The full JSON response (click **Preview** or **Response** tab, copy all)
+- Look for pagination fields: `page`, `offset`, `skip`, `cursor`, `nextPageToken`, `total`, `hasMore`
+
+**This API call is your scraper. You do not need BeautifulSoup at all.**
+
+### Step C — If you find an API key in the headers (check this)
+Sometimes the API key is a public token embedded in the page's JavaScript files.
+- In DevTools → Sources tab → search (Ctrl+Shift+F) for the key value
+- Or in Network tab → find a JS file → search for `apiKey`, `api_key`, `token`, `bearer`
+- Public tokens like this are fine to use — they are not private credentials
+- If the token expires (JWT with exp field): decode it at jwt.io to see the expiry. If it's short-lived, you need to automate the token refresh.
+
+### Step D — If there is no API call visible (rare — use sitemap)
+Some sites server-render everything with no separate API calls. Try the sitemap:
+- Go to `https://[domain]/sitemap.xml` or `https://[domain]/sitemap_index.xml`
+- If it exists, it lists all page URLs. Scrape the sitemap to get all entity URLs, then scrape each page with BeautifulSoup/httpx
+- Look for the pattern: the sitemap often groups by type (e.g. `/contractors/sitemap.xml`, `/products/sitemap.xml`)
+
+### Step E — Last resort: Playwright (only if A, B, D all failed)
+Use Playwright only when the data requires JavaScript execution and there is no API and no sitemap.
+- `pip install playwright && python -m playwright install chromium`
+- Playwright can click, scroll, fill forms, and wait for network responses
+- It is slow (1-2 seconds per page) — only use it if everything else fails
+
+### What to paste into the scraper prompt (Prompt 3A)
+You need exactly:
+1. The cURL command (or URL + headers + body)
+2. The raw JSON response for one full page of results (not just one record)
+3. The name of the pagination field (e.g. "page 2 = add `?page=2` to the URL")
+4. Whether auth headers expire and how to refresh them
 
 ---
 
@@ -79,7 +122,7 @@ Create this exact directory structure with all files as empty stubs:
 
 After creating the structure:
 1. Run: cd [PROJECT_NAME]/frontend && npx create-next-app@latest . --typescript --tailwind --app --yes
-2. Run: cd [PROJECT_NAME]/backend && pip install fastapi uvicorn sqlalchemy httpx anthropic python-dotenv tqdm alembic pydantic asyncio aiofiles
+2. Run: cd [PROJECT_NAME]/backend && pip install fastapi uvicorn sqlalchemy httpx anthropic python-dotenv tqdm alembic pydantic aiofiles
 3. Write backend/requirements.txt with all installed packages pinned to current versions
 
 Confirm every file and directory exists when done.
@@ -93,81 +136,93 @@ Confirm every file and directory exists when done.
 ```
 Write the complete SQLAlchemy ORM database schema in backend/app/database.py for [PROJECT_NAME].
 
-The main data entity is [ENTITY_NAME] (e.g. contractor, property, listing, company). For each record we store:
-- Raw data fields from the source: [LIST_YOUR_FIELDS — e.g. name, address, city, zip, phone, rating, review_count, tier, certifications, website, latitude, longitude]
-- Metadata: source_id (unique, from the scraped source), raw_json (full original response), created_at, updated_at, data_quality_issues (JSON array of strings)
+The main data entity is [ENTITY_NAME] (e.g. contractor, property, listing, company). For each record store:
+- Raw data fields from the source: [LIST YOUR FIELDS — e.g. name, address, city, zip, phone, rating, review_count, tier, certifications, website, latitude, longitude]
+- Metadata: source_id (unique, from the scraped source), raw_json (full original response as text), created_at, updated_at, data_quality_issues (JSON array of strings)
 
 The insights table stores AI-generated intelligence per entity:
 - entity_id (FK), generated_at, model_used, prompt_version
-- business_summary (text)
-- talking_point (text)
-- risk_alert (text)
-- priority (High / Medium / Low)
-- priority_reasoning (text)
-- next_action (text)
-- next_action_type (call / email / brochure / visit)
-- insight_score (float 0-1)
-- score_breakdown (JSON)
-- flagged_for_review (bool, default false)
-- flag_reason (text, nullable)
+- business_summary (text), talking_point (text), risk_alert (text)
+- priority ("High" / "Medium" / "Low"), priority_reasoning (text)
+- next_action (text), next_action_type ("call" / "email" / "brochure" / "visit")
+- insight_score (float 0-1), score_breakdown (JSON)
+- flagged_for_review (bool default false), flag_reason (text nullable)
 
 The evaluations table stores automated + human quality scores per insight:
-- insight_id (FK), evaluated_at, evaluator (auto / human)
+- insight_id (FK), evaluated_at, evaluator ("auto" / "human")
 - relevance_score, actionability_score, accuracy_score, clarity_score, overall_score (all float 0-1)
 - notes (text)
 
 The pipeline_runs table logs every scraper execution:
-- run_at, zip_code (or equivalent territory identifier), radius
+- run_at, territory (zip or equivalent), radius
 - records_fetched, records_new, records_updated
 - insights_generated, insights_flagged
 - errors (JSON array), duration_seconds
 
 Requirements:
-- Use SQLAlchemy 2.0 declarative style
-- Add a get_db() FastAPI dependency
-- Add init_db() that creates all tables
-- Add an upsert helper: upsert_entity(session, data: dict) that inserts or updates on source_id
-- Make all types Postgres-compatible (no SQLite-only syntax)
-- Write backend/app/models.py with matching Pydantic response schemas for all tables
+- SQLAlchemy 2.0 declarative style
+- get_db() FastAPI dependency
+- init_db() that creates all tables on startup
+- upsert_entity(session, data: dict) helper that inserts or updates on source_id conflict
+- All types Postgres-compatible (no SQLite-only syntax)
+- Write backend/app/models.py with matching Pydantic response schemas for all tables including paginated response wrapper
 ```
 
 ---
 
 ## STEP 3A + 3B — Run These Two in Parallel
 *Open two Claude sessions. Paste 3A in one, 3B in the other. Start both at the same time.*
-*3A takes 30-45 minutes (scraping). 3B takes 10 minutes. Continue to Step 4 once 3B is done — do not wait for 3A.*
+*3A runs 30-45 minutes. 3B takes 10 minutes. Move to Step 4 once 3B finishes — do not wait for 3A.*
 
 ---
 
-### STEP 3A — Data Scraper (Long-running — start first)
+### STEP 3A — Data Scraper (Start first — runs in background)
 
 ```
 Build the async data scraper in scraper/fetch_data.py for [PROJECT_NAME].
 
-Here is the real network request I captured:
---- PASTE YOUR FULL CURL COMMAND HERE ---
+SCRAPING APPROACH: [PICK ONE AND DELETE THE OTHERS]
 
-Here is a sample JSON response:
---- PASTE THE RAW JSON RESPONSE HERE ---
+--- IF YOU FOUND AN API CALL IN DEVTOOLS ---
+Here is the real network request I captured from [DATA_SOURCE]:
+CURL COMMAND: [PASTE FULL CURL HERE]
+SAMPLE JSON RESPONSE: [PASTE FULL RAW JSON HERE]
+Pagination field: [e.g. "page" — increment from 1, stop when results array is empty]
+Total count field: [e.g. "total" — use this to calculate total pages]
 
-The pagination field is: [PASTE THE FIELD NAME — e.g. "page", "offset", "cursor"]
-Total records field: [PASTE — e.g. "total", "totalResults", "count"]
+Build the scraper using httpx.AsyncClient, replicating all headers from the cURL command exactly.
 
-Build a scraper that:
-1. Accepts --zip [ZIP_CODE] --radius [MILES] as CLI args (or equivalent territory params)
-2. Handles pagination: fetches all pages until no more results
-3. Uses httpx.AsyncClient with connection pooling and a semaphore limiting to 5 concurrent requests
-4. Retries failed requests up to 3 times with exponential backoff (1s, 3s, 9s)
-5. Parses each record into the database schema using the upsert_entity helper
-6. Logs data quality issues per record: which fields are missing or anomalous
-7. Supports incremental refresh: skips records updated in the last 24 hours unless --force is passed
-8. Shows a tqdm progress bar with current page / total pages
-9. Writes a pipeline_runs record at the end with all counts
-10. Prints a summary table at the end: X new, Y updated, Z skipped, W errors
+--- IF THE SITE HAS A SITEMAP ---
+Sitemap URL: [PASTE URL e.g. https://domain.com/sitemap.xml]
+Each page URL pattern looks like: [e.g. https://domain.com/contractors/[slug]]
+The data fields I need from each page: [LIST FIELDS]
 
-Make it runnable as: python fetch_data.py --zip 10013 --radius 10
+Build the scraper in two phases:
+Phase 1 — parse the sitemap XML to extract all entity URLs (use httpx + xml.etree.ElementTree)
+Phase 2 — fetch each URL with httpx, parse HTML with BeautifulSoup, extract the fields
 
-If rate limited (429), back off 60 seconds and retry. Log every error with the record ID and reason.
+--- IF USING BEAUTIFULSOUP DIRECTLY ---
+The page URL pattern is: [e.g. https://domain.com/search?zip=10013&page=1]
+The HTML elements containing the data: [describe the CSS selectors or HTML structure you observed]
+Build the scraper using httpx + BeautifulSoup4.
+
+--- REQUIREMENTS FOR ALL APPROACHES ---
+1. Accepts --zip [VALUE] --radius [MILES] as CLI args (or equivalent territory param)
+2. Handles all pages until exhausted
+3. httpx.AsyncClient with semaphore(5) — max 5 concurrent requests
+4. Retry failed requests up to 3 times: wait 2s, 6s, 18s between attempts
+5. On 429 rate limit: wait 60 seconds then retry
+6. Parse each record and call upsert_entity() — insert if new, update if source_id exists
+7. For each record, detect and log data quality issues: missing phone, missing rating, no reviews, no address, no website
+8. Skip records updated in last 24 hours unless --force flag is passed
+9. tqdm progress bar showing current/total
+10. Write a pipeline_runs record at end
+11. Print final summary: X new, Y updated, Z skipped, W errors
+
+Runnable as: python fetch_data.py --zip 10013 --radius 10 [--force]
+
+Add a --audit flag that just prints data quality stats without scraping:
+total records, % with each key field, breakdown by [MAIN_CATEGORY], top data quality issues
 ```
 
 ---
@@ -175,44 +230,36 @@ If rate limited (429), back off 60 seconds and retry. Log every error with the r
 ### STEP 3B — FastAPI Backend (Run in parallel with 3A)
 
 ```
-Build the complete FastAPI backend for [PROJECT_NAME].
+Build the complete FastAPI backend in backend/app/main.py and the router files for [PROJECT_NAME].
 
 backend/app/main.py:
-- Initialize FastAPI app with title, version, description
-- Add CORSMiddleware: allow_origins from ALLOWED_ORIGINS env var (comma-separated), allow all methods and headers, allow_credentials=True
-- Add request timing middleware that logs method + path + duration
-- Include all three routers: data, insights, export
-- Add GET /health that returns {"status": "ok", "record_count": <int>, "insight_count": <int>}
-- Call init_db() on startup
+- FastAPI app with title, version
+- CORSMiddleware: allow_origins from ALLOWED_ORIGINS env var (comma-split), all methods, all headers, credentials=True
+- Request timing middleware: log method + path + status + duration
+- Include routers: data, insights, export
+- GET /health → {"status": "ok", "record_count": int, "insight_count": int}
+- Call init_db() on startup lifespan
 
 backend/app/routers/data.py:
-GET /[entities] — paginated list with filters:
-  - territory (zip or equivalent)
-  - priority (High/Medium/Low)
-  - [RELEVANT_FILTER_1 — e.g. tier, category, type]
-  - [RELEVANT_FILTER_2 — e.g. min_rating, min_score]
-  - has_alert (bool)
-  - sort_by (priority/rating/name/created_at)
-  - search (text search on name and address)
-  - page, page_size (default 20)
-  Returns: { items: [...], total: int, page: int, page_size: int }
-  Each item includes its latest insight if one exists.
+GET /[entities]:
+  Filters: territory, priority, [FILTER_1 e.g. tier], [FILTER_2 e.g. min_rating], has_alert (bool), search (text on name+address), sort_by (priority/rating/name/created_at), page (int), page_size (int default 20)
+  Returns: { items: [...with latest insight attached...], total: int, page: int, page_size: int }
 
-GET /[entities]/{id} — full record + latest insight + all evaluations
+GET /[entities]/{id}: full record + latest insight + all evaluations
 
 backend/app/routers/insights.py:
-POST /insights/{entity_id}/regenerate — trigger fresh insight generation for one record
-PATCH /insights/{insight_id}/flag — body: { reason: string } — sets flagged_for_review = true
-GET /insights/flagged — returns all flagged insights with entity info
+POST /insights/{entity_id}/regenerate — trigger fresh insight generation
+PATCH /insights/{insight_id}/flag — body: { reason: string }
+GET /insights/flagged — all flagged insights with entity info attached
 
 backend/app/routers/export.py:
-GET /export/csv — accepts same filters as the main list endpoint, returns CSV download
-  Columns: name, [key fields], priority, talking_point, next_action, phone/contact
-GET /export/summary — aggregate stats: total records, breakdown by priority, breakdown by [MAIN_CATEGORY], average insight score, count flagged
+GET /export/csv — same filters as list, returns CSV download
+  Columns: name, [key fields], priority, talking_point, next_action, phone
+GET /export/summary → { total, by_priority, by_[CATEGORY], avg_score, flagged_count }
 
-All routes: typed Pydantic response_model, proper 404/422 error handling, async database access.
+All routes: typed Pydantic response_model, 404/422 error handling, async DB access.
 
-Write backend/.env.example:
+backend/.env.example:
 ANTHROPIC_API_KEY=
 ALLOWED_ORIGINS=http://localhost:3000
 DATABASE_URL=sqlite:///./[project].db
@@ -221,7 +268,7 @@ DATABASE_URL=sqlite:///./[project].db
 ---
 
 ## STEP 4A + 4B — Run These Two in Parallel
-*Start both as soon as Step 3B is done. Do not wait for 3A (scraping) to finish.*
+*Start both as soon as Step 3B is done. Scraper (3A) is still running — that is fine.*
 
 ---
 
@@ -230,25 +277,25 @@ DATABASE_URL=sqlite:///./[project].db
 ```
 Build the AI insights engine in scraper/build_insights.py for [PROJECT_NAME].
 
-Use the Anthropic Python SDK with Claude claude-sonnet-4-6. Generate all 5 insight fields in a single API call per record using tool_use to enforce structured output. Enable prompt caching on the system prompt.
+Use Anthropic Python SDK with Claude claude-sonnet-4-6. Generate all 5 insight fields in a single API call per record using tool_use for structured output. Enable prompt caching on the system prompt with cache_control type="ephemeral".
 
-SYSTEM PROMPT (write this carefully):
-You are a senior B2B sales strategist for [COMPANY/INDUSTRY]. You specialize in [DOMAIN — e.g. roofing products, SaaS, industrial equipment]. Your job is to analyze [ENTITY_TYPE] records and generate actionable pre-call intelligence for sales representatives. You write concisely — reps read your output in 30 seconds before a call. Never fabricate data not present in the input. If a field is missing, work with what you have.
+SYSTEM PROMPT:
+You are a senior B2B sales strategist for [COMPANY/INDUSTRY]. You specialize in [DOMAIN]. Your job is to analyze [ENTITY_TYPE] records and generate pre-call sales intelligence for reps. You write concisely — reps read this in 30 seconds before a call. Never fabricate details not present in the input. If a field is missing, work with what you have.
 
-USER PROMPT template (fill fields from DB record):
-Analyze this [ENTITY_NAME] and generate sales intelligence:
+USER PROMPT template:
+Analyze this [ENTITY_NAME] and generate sales intelligence.
 Name: {name}
-[KEY_FIELD_1 — e.g. Tier/Category]: {tier}
-[KEY_FIELD_2 — e.g. Rating]: {rating} ({review_count} reviews)
-[KEY_FIELD_3 — e.g. Certifications]: {certifications}
-[KEY_FIELD_4 — e.g. Years in business]: {years}
+[FIELD_1 — e.g. Tier]: {value}
+[FIELD_2 — e.g. Rating]: {value} ({review_count} reviews)
+[FIELD_3 — e.g. Certifications]: {value}
+[FIELD_4 — e.g. Years in business]: {value}
 Location: {city}, {zip}
 Website: {website or "none"}
 
-Tool definition (enforce this output schema):
+Tool schema (enforce this output exactly):
 {
-  "business_summary": "2-3 sentences: scale, activity level, market position",
-  "talking_point": "one specific cold-call opening line referencing their actual data",
+  "business_summary": "2-3 sentences on scale, activity level, market position",
+  "talking_point": "one specific cold-call opening line using their actual data — not generic",
   "risk_alert": "one sentence red flag, or 'None identified'",
   "priority": "High | Medium | Low",
   "priority_reasoning": "one sentence explanation",
@@ -256,14 +303,13 @@ Tool definition (enforce this output schema):
   "next_action_type": "call | email | brochure | visit"
 }
 
-Pipeline logic:
-- Query all records with no insight, or insight older than 48 hours (skip if --no-force and insight is fresh)
-- Process in batches of 20
-- Use asyncio.gather with semaphore(5) for 5 concurrent calls
-- Write each result to the insights table immediately (don't wait for full batch)
-- Log token usage per batch and running total cost estimate
-- Handle 429/529 with exponential backoff: wait 60s on 429, 30s on 529
-- At the end: print total generated, total skipped, total tokens used, estimated cost
+Pipeline:
+- Query records with no insight OR insight older than 48h (skip fresh ones unless --force)
+- Batches of 20, asyncio.gather with semaphore(5)
+- Write each result to insights table immediately after generation
+- Handle 429/529: wait 60s on 429, 30s on 529, retry up to 3 times
+- Log token usage per batch, print running cost estimate ($3/1M input, $15/1M output for Sonnet)
+- End summary: total generated, skipped, tokens used, estimated cost
 
 Runnable as: python build_insights.py --zip 10013 [--force]
 ```
@@ -273,55 +319,49 @@ Runnable as: python build_insights.py --zip 10013 [--force]
 ### STEP 4B — Frontend Types and Components
 
 ```
-Build the complete frontend component library for [PROJECT_NAME].
+Build the complete frontend type system and component library for [PROJECT_NAME].
 
 frontend/src/lib/types.ts:
-Define TypeScript interfaces for all data shapes:
-- [EntityName] (all DB fields)
-- Insight (all insight fields)
+- [EntityName]: all DB fields
+- Insight: all insight fields
 - Evaluation
-- [EntityName]WithInsight (entity + latest insight)
+- [EntityName]WithInsight: entity + latest insight field
 - Priority = "High" | "Medium" | "Low"
-- NextActionType = "call" | "email" | "brochure" | "visit"
-- FilterState { territory, priority, [FILTER_1], [FILTER_2], hasAlert, sortBy, search, page }
-- PaginatedResponse<T> { items: T[], total: number, page: number, page_size: number }
-- SummaryStats { total: number, by_priority: Record<Priority, number>, by_[CATEGORY]: Record<string, number>, avg_score: number, flagged: number }
+- FilterState: { territory: string, priority: Priority[], [filter1]: string, [filter2]: number, hasAlert: boolean, sortBy: string, search: string, page: number }
+- PaginatedResponse<T>: { items: T[], total: number, page: number, page_size: number }
+- SummaryStats: { total: number, by_priority: Record<Priority,number>, avg_score: number, flagged: number }
 
 frontend/src/lib/api.ts:
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL (no trailing slash)
-Implement typed fetch wrappers:
-- getEntities(filters: FilterState): Promise<PaginatedResponse<[EntityName]WithInsight>>
-- getEntity(id: number): Promise<[EntityName]WithInsight>
-- searchEntities(q: string): Promise<[EntityName]WithInsight[]>
-- regenerateInsight(entityId: number): Promise<Insight>
-- flagInsight(insightId: number, reason: string): Promise<void>
+const BASE = process.env.NEXT_PUBLIC_BACKEND_URL (never add trailing slash)
+- getEntities(filters): Promise<PaginatedResponse<[EntityName]WithInsight>>
+- getEntity(id): Promise<[EntityName]WithInsight>
+- searchEntities(q): Promise<[EntityName]WithInsight[]>
+- regenerateInsight(entityId): Promise<Insight>
+- flagInsight(insightId, reason): Promise<void>
 - getFlagged(): Promise<[EntityName]WithInsight[]>
 - getSummary(): Promise<SummaryStats>
-- exportCSV(filters: FilterState): void — builds URL with query params, triggers window.location download
+- exportCSV(filters): void — builds URL params, triggers window.location
 
-frontend/src/components/PriorityBadge.tsx:
-Props: priority: Priority. Render a colored pill. High=red, Medium=amber, Low=gray. Small and inline.
+PriorityBadge.tsx: colored pill — High=red-600, Medium=amber-500, Low=gray-400. Compact, inline.
 
-frontend/src/components/AlertBanner.tsx:
-Props: alert: string | null. Render nothing if null or "None identified". Otherwise render a compact amber warning row with an icon.
+AlertBanner.tsx: renders nothing if alert is null or "None identified". Otherwise amber row with warning icon.
 
-frontend/src/components/InsightPanel.tsx:
-Props: entity: [EntityName]WithInsight, onFlag: (reason: string) => void, onRegenerate: () => void
-Layout (fits in a 420px right panel):
+InsightPanel.tsx (fits in 420px right panel):
 - Header: entity name + PriorityBadge
-- "Use this on the call" callout box (light orange background): talking_point
-- Business summary paragraph
+- Orange-tinted callout box labeled "Use this on the call": talking_point field
+- business_summary as paragraph
 - AlertBanner for risk_alert
-- Next action row: icon (phone/email/gift/map) + next_action text
-- Footer: insight_score as a labeled thin bar, timestamp, Flag button (opens a reason input), Regenerate button (spinner while loading)
+- Next action row: icon based on next_action_type + next_action text
+- Footer: insight_score thin progress bar, generated timestamp, Flag button (opens reason text input), Regenerate button with loading spinner
 
-frontend/src/components/DataCard.tsx:
-Props: entity: [EntityName]WithInsight, selected: boolean, onClick: () => void
-Compact card (fits 6+ on screen): name, [KEY_FIELD] badge, city, rating stars, PriorityBadge, one-line business_summary truncated. Orange left border when selected.
+DataCard.tsx (compact, 6+ visible without scroll):
+- name, [KEY_FIELD] badge, city, [rating or key metric], PriorityBadge
+- One-line business_summary truncated with line-clamp-1
+- Orange left border when selected=true
 
-frontend/src/components/FilterBar.tsx:
-Props: filters: FilterState, onChange: (f: FilterState) => void
-Single-row layout on desktop: territory input, Priority checkboxes, [FILTER_1] dropdown, [FILTER_2] slider or toggle, Alert toggle, Sort dropdown, Search input. Every change fires onChange immediately.
+FilterBar.tsx (single row on desktop):
+- Territory text input, Priority multi-checkbox, [FILTER_1] select, [FILTER_2] range/toggle, Alert toggle, Sort select, Search text input
+- Every change fires onChange(newFilters) immediately — no submit button
 ```
 
 ---
@@ -332,167 +372,199 @@ Single-row layout on desktop: territory input, Priority checkboxes, [FILTER_1] d
 ```
 Build the main dashboard pages for [PROJECT_NAME].
 
-frontend/src/app/page.tsx — Primary Rep Dashboard:
-
-Layout: FilterBar pinned at top. Below it: left column (38%) = scrollable DataCard list with total count header. Right column (62%) = InsightPanel (empty state when nothing selected).
+frontend/src/app/page.tsx — Rep Dashboard:
+Layout: FilterBar at top. Below: left 38% = scrollable DataCard list with "Showing X of Y" header. Right 62% = InsightPanel (shows empty state placeholder when nothing selected).
 
 Behaviour:
-- On mount, call getEntities with default filters, display results
-- Clicking a DataCard opens that entity's InsightPanel on the right and marks card as selected
-- Filtering: any FilterBar change calls getEntities with updated filters, resets to page 1
-- Pagination: "Load more" button at bottom of card list (or infinite scroll)
-- Top-right actions: "Export CSV" button, "Summary" stat chips (total shown, High priority count, alerts count)
-- Keyboard: up/down arrows navigate cards, Escape deselects
+- On mount: getEntities(defaultFilters), display results
+- Card click: open InsightPanel on right, mark card selected
+- Filter change: re-fetch, reset to page 1
+- Load more button at bottom (or infinite scroll)
+- Top-right: Export CSV button, stat chips: total count, High priority count (red), alert count (amber)
+- Keyboard: arrow keys navigate cards, Escape deselects
 
 frontend/src/app/manager/page.tsx — Manager Dashboard:
+Top section — Flagged Insights (getFlagged() on mount):
+- List: entity name, flag_reason, insight snippet, "Mark Reviewed" button
+- Green banner if empty
 
-Top section — Flagged Insights:
-- Calls getFlagged() on mount
-- Shows a dismissable list: entity name, flag_reason, insight snippet, "Mark Reviewed" button (calls flagInsight with reason "reviewed_by_manager")
-- If empty, show a green "No flagged insights" message
+Middle — Summary Stats (getSummary()):
+- 4 stat cards: Total, High priority, Avg score, Flagged
+- Priority bar chart using plain Tailwind divs (no library): three colored bars with labels and counts
 
-Middle section — Summary Stats (calls getSummary()):
-- 4 stat cards: Total records, High priority count, Avg insight score, Flagged count
-- Priority distribution: 3 colored bars (no chart library needed — plain Tailwind divs with widths as percentages)
-- [MAIN_CATEGORY] breakdown: similar bar chart
+Bottom — Table View:
+- Sortable columns: name, [CATEGORY], rating, priority, insight_score, flagged
+- Click row → modal with full InsightPanel
+- Bulk checkboxes → Export CSV for selected
+- Regenerate button per row
 
-Bottom section — Full Table View:
-- Sortable columns: name, [CATEGORY], rating, priority, insight_score, flagged status
-- Click a row to open a modal with the full InsightPanel
-- Bulk select checkboxes → Export CSV for selected records
-- "Regenerate" button per row
+Top nav: "Rep View" | "Manager View" links.
 
-Navigation: add a minimal top nav with "Rep View" and "Manager View" links.
-
-Design system for this project (B2B tool, not consumer):
+Design: B2B professional.
 - Primary text: gray-900
-- Accent / interactive: blue-700 (#1d4ed8)
-- High priority: red-600, Medium: amber-500, Low: gray-400
-- Background: gray-50, Cards: white with gray-200 border
-- Font: system font stack, no custom fonts needed
+- Accent: blue-700
+- High=red-600, Medium=amber-500, Low=gray-400
+- Background: gray-50, cards: white with border-gray-200
+- No custom fonts, no emojis
 ```
 
 ---
 
 ## STEP 6A + 6B — Run These Two in Parallel
-*Start both once Step 5 is done.*
 
 ---
 
-### STEP 6A — Automated Evaluator
+### STEP 6A — Automated Evaluator + Pipeline Orchestrator
 
 ```
-Build the automated insight evaluator in scraper/evaluate_insights.py for [PROJECT_NAME].
+Build two files for [PROJECT_NAME].
 
-Use claude-haiku-4-5-20251001 (cheaper, faster) for evaluation calls. This is a separate model acting as quality auditor.
+FILE 1: scraper/evaluate_insights.py
+Use claude-haiku-4-5-20251001 for cost efficiency. This model acts as quality auditor — different system prompt from the insight generator.
 
-System prompt for the evaluator:
-You are a quality auditor for AI-generated sales intelligence. You evaluate insights on 4 dimensions and return only a JSON score object — no commentary.
+Evaluator system prompt:
+You are a quality auditor for AI-generated sales intelligence. Score the insight on 4 dimensions and return only a JSON object. No commentary.
+- relevance (0-1): Is this specific to this entity, or generic boilerplate that could apply to anyone?
+- actionability (0-1): Does the next_action give the rep something specific and concrete to do?
+- accuracy (0-1): Are all claims grounded in the input data? Penalize invented details not present in input.
+- clarity (0-1): Is it written for a non-expert rep reading in 30 seconds, not a data analyst?
 
-Scoring rubric:
-- relevance (0-1): Is the insight specific to this entity, or generic boilerplate that could apply to anyone?
-- actionability (0-1): Does the next_action give the sales rep something concrete and specific to do?
-- accuracy (0-1): Are all claims in the insight grounded in the input data? Penalize any detail not present in the input.
-- clarity (0-1): Is it written for a non-expert rep who reads it in 30 seconds, not a data analyst?
+User prompt: Input data provided: [ENTITY FIELDS]. Generated insight: [ALL 5 FIELDS]. Return: {"relevance": float, "actionability": float, "accuracy": float, "clarity": float}
 
-User prompt template:
-Rate this insight. Input data: [PASTE ENTITY FIELDS]. Generated insight: [PASTE ALL 5 FIELDS].
-Return: {"relevance": float, "actionability": float, "accuracy": float, "clarity": float}
+Pipeline:
+- Query all insights with no evaluation record
+- Batches of 20, semaphore(5)
+- Write to evaluations table with evaluator="auto"
+- overall_score = mean of 4 dimensions
+- If overall_score < 0.6: set insight.flagged_for_review=True, flag_reason="auto_eval_low_score"
+- Print: score histogram, % flagged, avg score by priority tier
+- Export flagged to scraper/flagged_insights.json
+Runnable as: python evaluate_insights.py [--all]
 
-Pipeline logic:
-- Query all insights with no evaluation record yet
-- Run evaluations in batches of 20 with semaphore(5)
-- Write evaluation to evaluations table with evaluator="auto"
-- Compute overall_score = average of 4 dimensions
-- If overall_score < 0.6: set insight.flagged_for_review = true, insight.flag_reason = "auto_eval_low_score"
-- Print a summary: score distribution histogram, % flagged, average by priority tier
-- Export all flagged insights to scraper/flagged_insights.json
+FILE 2: scraper/run_pipeline.py
+Single entry point that runs all steps in order:
+1. fetch_data.py
+2. build_insights.py
+3. evaluate_insights.py
 
-Runnable as: python evaluate_insights.py [--all to re-evaluate everything]
-```
-
----
-
-### STEP 6B — Evaluation Documentation
-
-```
-Write EVALUATION.md at the project root for [PROJECT_NAME].
-
-This is a required deliverable. Write it as a professional document a senior engineer or hiring manager would read. Be specific and concrete — no generic statements.
-
-Structure:
-
-## Automated Evaluation
-- The 4 scoring dimensions with exact definitions and examples of what scores 0.2 vs 0.8 vs 1.0
-- How overall_score is computed
-- The flagging threshold (0.6) and what happens to flagged insights (held from reps? regenerated? queued?)
-- Estimated cost to evaluate 1,000 records using claude-haiku-4-5-20251001 (compute from ~500 tokens/call × $0.00025/1k)
-- How prompt_version field enables comparing evaluation scores across prompt iterations
-
-## Human-in-the-Loop Review
-- The manager dashboard workflow step by step
-- What specifically a manager reviews (not just "reviews the insight" — what do they look for?)
-- How a manager rejection feeds back: does it trigger regeneration? Does it update the prompt?
-- The flag_reason field categories: auto_eval_low_score, manager_rejected, outdated_data, [add 2 more]
-
-## Continuous Improvement Loop
-- How to run an A/B test: same 50 records, prompt version A vs B, compare average eval scores
-- Trigger for full regeneration: when to wipe and redo all insights (prompt change, data refresh)
-- How to track score improvement over time (query evaluations table grouped by prompt_version)
-
-## Limitations
-- LLM-as-judge is not ground truth — it reflects the evaluator model's priors
-- Accuracy scoring is weak without external ground truth to verify claims against
-- Human review creates a bottleneck at scale — describe a tiered approach (auto for most, human for High priority flagged)
-
-## Metrics Dashboard (Future)
-- Rep engagement rate: which insights get acted on (requires CRM integration)
-- Insight staleness: records with insights older than 7 days
-- Coverage: % of records with a current insight
-```
-
----
-
-## STEP 7 — Pipeline Orchestrator
-*Run after Steps 6A is done.*
-
-```
-Build scraper/run_pipeline.py as the single entry point for [PROJECT_NAME].
-
-It runs the full pipeline in order:
-1. fetch_data.py — scrape and upsert records
-2. build_insights.py — generate AI insights for new/stale records
-3. evaluate_insights.py — score all un-evaluated insights
-
-Accept CLI flags:
-  --zip (or --territory) — required
-  --radius — default 10
-  --force-insights — regenerate insights even if fresh
-  --incremental — only process records updated in last 24h
-  --skip-eval — skip evaluation step
-  --dry-run — print what would run but don't execute
-
-At the end, print a pipeline report:
-  Records fetched / new / updated
-  Insights generated / skipped
-  Insights evaluated / flagged
-  Total runtime
-  Estimated API cost (tokens × price)
-
-Write a pipeline_runs record to the database with all of these numbers.
-
-Also add a --report flag that just prints stats from the last 5 pipeline_runs without running anything.
-
+Flags: --zip (required), --radius (default 10), --force-insights, --incremental (last 24h only), --skip-eval, --dry-run
+End report: records fetched/new/updated, insights generated/flagged, total runtime, estimated API cost
+Writes pipeline_runs record.
+--report flag: print stats from last 5 runs without scraping.
 Runnable as: python run_pipeline.py --zip 10013 --radius 10
 ```
 
 ---
 
-## STEP 8 — Deployment
-*Run after everything is working locally.*
+### STEP 6B — Evaluation Doc + Presentation Deck
 
 ```
-Set up the complete deployment configuration for [PROJECT_NAME].
+Write two documents for [PROJECT_NAME].
+
+DOCUMENT 1: EVALUATION.md
+
+## Automated Evaluation
+- 4 scoring dimensions with exact rubrics and examples (what scores 0.2 vs 0.8 vs 1.0 on each dimension)
+- Overall score formula: mean of 4 dimensions
+- Flagging threshold: overall < 0.6 → flagged_for_review = true
+- What happens to flagged insights: surfaced in manager dashboard, held from rep view until reviewed
+- Cost estimate: ~500 tokens/eval × $0.00025/1k tokens × 1000 records = $0.13 for full evaluation pass
+- How prompt_version enables A/B testing across prompt iterations
+
+## Human-in-the-Loop Review
+- Manager dashboard workflow step by step
+- What to look for: generic talking points, invented facts, outdated data signals
+- How rejections trigger regeneration: flag_reason="manager_rejected" → picked up by next pipeline run with --force-insights
+- flag_reason categories: auto_eval_low_score, manager_rejected, outdated_data, missing_context, hallucinated_fact
+
+## Continuous Improvement Loop
+- A/B test: same 50 records, prompt_version A vs B, compare eval scores
+- When to wipe and regenerate: major prompt change, data refresh older than 7 days
+- Tracking: query evaluations grouped by prompt_version → plot avg score over versions
+
+## Limitations
+- LLM-as-judge reflects evaluator model's biases, not ground truth
+- Accuracy scoring cannot verify claims against external sources
+- Human review bottleneck at scale: triage approach — only human-review High priority flagged insights
+
+---
+
+DOCUMENT 2: PRESENTATION.md
+
+Write a complete 1-hour live presentation script for [PROJECT_NAME]. Structure:
+
+## Slide 1 — The Problem (5 min)
+- What problem does [COMPANY/CLIENT] face with their current data/process
+- Why existing tools fail (keyword search, manual research, spreadsheets)
+- What a sales rep actually needs in the 30 seconds before a call
+- Exact words to say
+
+## Slide 2 — Live Demo (15 min)
+- Walk through the rep dashboard: filtering, card selection, InsightPanel
+- Read a talking_point out loud — explain why it is specific, not generic
+- Show a risk alert — explain what triggers it
+- Show the manager dashboard: flagged insights, summary stats
+- Show export CSV
+- Exact narration for each click
+
+## Slide 3 — System Architecture (10 min)
+- ASCII diagram: Browser → Next.js → FastAPI → SQLite | Claude API | [DATA_SOURCE] Scraper
+- Explain each layer in one sentence
+- Why FastAPI over Django/Flask (async, Pydantic, OpenAPI auto-docs)
+- Why SQLite for demo, why Postgres for production (explain the migration path — it is one line change in DATABASE_URL)
+- Why SSE or REST (explain the choice made)
+- Exact words to say for each component
+
+## Slide 4 — Data Pipeline (10 min)
+- How the scraper works: the network request approach vs BeautifulSoup
+- Why you chose this scraping method (cite: JS-rendered page, API found in DevTools)
+- Pagination, concurrency (semaphore 5), retry logic — explain each decision
+- Incremental refresh: why 24h TTL (balance freshness vs API cost)
+- Data quality logging: what issues were found, how they are surfaced
+- Exact words to say
+
+## Slide 5 — AI Insights Engine (10 min)
+- Why pre-computed not on-demand (explain: faster for reps, consistent, evaluatable)
+- The 5 insight types and why each one matters to a sales rep
+- Prompt design decisions: why one call not 5, why tool_use for structured output, why prompt caching
+- Token cost math: X records × Y tokens × $Z/1k = total cost
+- Exact words to say
+
+## Slide 6 — Evaluation Framework (5 min)
+- The 4 scoring dimensions and what each catches
+- The flagging threshold and what happens to flagged insights
+- Human-in-the-loop: manager review workflow
+- How this enables prompt iteration over time
+- Exact words to say
+
+## Slide 7 — Scalability & Extensions (3 min)
+- SQLite → Postgres: one environment variable change
+- Adding a new territory: one CLI command
+- Adding a new insight type: one field in the tool schema + one component
+- What would require actual engineering: auth, CRM integration, real-time refresh
+- Exact words to say
+
+## Q&A Prep — Likely Questions With Verbatim Answers
+List 8 questions the panel is likely to ask and exact answers:
+1. Why not use OpenAI instead of Claude?
+2. How do you handle data that changes frequently?
+3. What happens if the scraper breaks when the site updates?
+4. How would you scale this to 50 ZIP codes / 10,000 records?
+5. Why SQLite and not Postgres from the start?
+6. How do you know the AI insights are accurate?
+7. What would you build next with two more weeks?
+8. How would you handle auth and multi-user access?
+```
+
+---
+
+## STEP 7 — Deployment
+*Run after everything works locally.*
+
+```
+Set up full deployment for [PROJECT_NAME] and deploy it.
+
+PART 1 — Config files
 
 backend/Dockerfile:
 FROM python:3.11-slim
@@ -504,7 +576,11 @@ EXPOSE 8000
 CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
 
 backend/.dockerignore:
-__pycache__, *.pyc, .env, *.db, .git
+__pycache__
+*.pyc
+.env
+*.db
+.git
 
 railway.toml at repo root:
 [build]
@@ -517,90 +593,100 @@ healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-backend/.env.example:
-ANTHROPIC_API_KEY=
-ALLOWED_ORIGINS=http://localhost:3000
-DATABASE_URL=sqlite:///./[project].db
-
 frontend/.env.local.example:
 NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 
-Deployment instructions to include in README:
-Backend → Railway: connect repo, root directory = backend, add ANTHROPIC_API_KEY and ALLOWED_ORIGINS env vars
-Frontend → Vercel: connect repo, root directory = frontend, add NEXT_PUBLIC_BACKEND_URL = Railway service URL (no trailing slash)
-After both deploy: update ALLOWED_ORIGINS on Railway to the Vercel production URL, redeploy Railway
+PART 2 — Deploy steps (write these as a checklist in README.md)
 
-Also write a docker-compose.yml at the repo root for local development:
-- backend service: build from ./backend, port 8000, volume mount for SQLite persistence
-- No frontend service needed (run with npm run dev separately)
+Backend on Railway:
+1. Push repo to GitHub
+2. railway.app → New Project → Deploy from GitHub repo
+3. Select repo, set Root Directory = backend
+4. Variables tab → add: ANTHROPIC_API_KEY=[key], ALLOWED_ORIGINS=https://[your-vercel-url].vercel.app
+5. Settings → Networking → Generate Domain → enter port 8080 (Railway assigns this)
+6. Wait for build (~5 min first time). Check Deploy Logs — look for "Application startup complete"
+7. Visit [railway-url]/health — should return {"status":"ok"}
+
+Frontend on Vercel:
+1. vercel.com → New Project → Import repo
+2. Set Root Directory = frontend
+3. Environment Variables → add: NEXT_PUBLIC_BACKEND_URL=https://[railway-url] (NO trailing slash)
+4. Deploy. Visit the Vercel URL — UI should load.
+
+Wire up CORS:
+1. Copy the Vercel production URL (e.g. https://[project].vercel.app)
+2. Railway → Variables → update ALLOWED_ORIGINS = https://[project].vercel.app
+3. Railway auto-redeploys. Test a chat/query from the Vercel URL.
+
+Common errors and fixes:
+- "Failed to fetch" = CORS. Check ALLOWED_ORIGINS has no trailing slash.
+- "//chat 404" = NEXT_PUBLIC_BACKEND_URL has trailing slash. Remove it, redeploy Vercel.
+- OPTIONS 400 = Origin mismatch. ALLOWED_ORIGINS must exactly match browser Origin header.
+- App failed to respond = check Deploy Logs for startup crash (usually missing env var).
+- Build failed in 3 seconds = railway.toml not found at repo root (not inside backend/).
+
+PART 3 — Run the pipeline against live data after deployment
+Once Railway is running, SSH or use Railway's terminal to run:
+python run_pipeline.py --zip [ZIP] --radius 10
+This populates the database so the dashboard has real data.
 ```
 
 ---
 
-## STEP 9 — README and Loom Script
+## STEP 8 — README
+*Takes 10 minutes.*
 
 ```
-Write README.md at the repo root for [PROJECT_NAME]. Then write a 5-minute Loom video script.
+Write README.md at the repo root for [PROJECT_NAME].
 
-README.md sections:
-1. One-line description. Live demo URL placeholder.
-2. What it does — 4 bullet points from the rep's perspective, 2 from the manager's
-3. Architecture diagram (ASCII): Browser → Next.js → FastAPI → SQLite | Claude API | [DATA_SOURCE] Scraper
-4. Tech stack table: Layer | Technology | Why
-5. Data pipeline: how data is fetched, incremental refresh, data quality logging
-6. AI insights: the 5 insight types, the evaluation framework in 3 sentences
-7. Quick start: exact commands to run backend, run scraper, run frontend
-8. Environment variables table for both services
-9. Project structure tree
-10. Evaluation framework: link to EVALUATION.md
-
-Loom script (5 minutes, write exact words to say):
-0:00–0:30 The problem. Show the raw data source website. One sentence on why keyword search fails.
-0:30–1:30 Rep dashboard live demo. Filter by High priority. Click a card. Read the talking point out loud. Point to the risk alert. Show the next action.
-1:30–2:00 Show search, CSV export.
-2:00–2:30 Manager dashboard: flagged insights, summary stats, table view.
-2:30–3:30 Architecture: data pipeline → AI engine → evaluation loop → API → frontend. 30 seconds each.
-3:30–4:00 Evaluation framework: the 4 dimensions, what happens when score < 0.6.
-4:00–4:30 Extensibility: adding a new territory, scaling to Postgres, adding a new insight type.
-4:30–5:00 What I would build next with more time.
-
-Write the script as the exact words to say, not bullet points.
+Sections:
+1. Project name + one-line description. Live demo: [URL]
+2. Problem statement: 3 bullets from a sales rep's perspective
+3. Features: 4 bullets for reps, 2 for managers
+4. Architecture diagram (ASCII):
+   Browser → Next.js (Vercel) → FastAPI (Railway) → SQLite
+                                        ↓                ↑
+                                  Claude claude-sonnet-4-6    [DATA_SOURCE] Scraper
+5. Tech stack table: Layer | Technology | Why chosen
+6. Data pipeline: scraping approach used, incremental refresh, data quality logging
+7. AI insights: 5 types, evaluation framework in 3 sentences, cost estimate
+8. Quick start: exact commands — backend, scraper, frontend
+9. Environment variables table for both services
+10. Project structure tree
+11. Deployment: link to the step-by-step in this README or point to EVALUATION.md
+12. Known limitations: [3 honest limitations]
+13. What's next: [3 extensions ranked by effort]
 ```
 
 ---
 
-## PARALLEL EXECUTION MAP
+## PARALLEL EXECUTION MAP — 4-Hour Timeline
 
 ```
-Timeline (4 hours):
-
-00:00  Manual: Capture network request
-00:20  Step 1: Scaffold
-00:30  Step 2: Database schema
-00:40  START PARALLEL:
-         Session A → Step 3A: Scraper (runs 30-45 min in background)
-         Session B → Step 3B: Backend API
-01:10  Session B done → START PARALLEL:
-         Session A: still scraping (let it run)
-         Session B → Step 4A: Insights engine
-         Session C → Step 4B: Frontend types + components
-02:00  Steps 4A + 4B done → Step 5: Dashboard pages
-02:30  Step 5 done → START PARALLEL:
-         Session B → Step 6A: Evaluator
-         Session C → Step 6B: Evaluation docs
-         Check if 3A (scraper) is done — if yes, run build_insights.py
-03:00  Steps 6A + 6B done → Step 7: Pipeline orchestrator
-03:20  Step 7 done → Step 8: Deployment
-03:40  Step 8 done → Step 9: README + Loom script
-04:00  Record Loom video
+TIME    WHAT                                    WHO DOES IT
+0:00    Manual: network request capture         You (browser + DevTools)
+0:20    Step 1: Scaffold                        Claude session 1
+0:30    Step 2: Database schema                 Claude session 1
+0:40    Step 3A: Scraper          ──────────── Claude session 1 (runs 30-45 min)
+        Step 3B: Backend API      ──────────── Claude session 2 (runs 10 min)
+1:00    Step 4A: Insights engine  ──────────── Claude session 2 (while 3A still runs)
+        Step 4B: Frontend types + components ─ Claude session 3
+1:50    Step 5: Dashboard pages                 Claude session 2 or 3
+        (3A scraper likely done by now)
+2:20    Step 6A: Evaluator + orchestrator ───── Claude session 2
+        Step 6B: Eval doc + presentation ─────  Claude session 3
+3:00    Step 7: Deployment                      Claude session 1
+3:30    Step 8: README                          Claude session 1
+3:45    Run pipeline against live data          You (Railway terminal)
+4:00    Rehearse presentation                   You
 ```
 
 ---
 
 ## VARIABLES REFERENCE — Fill These In Before Starting
 
-| Variable | Example (GAF case) | Your value |
-|----------|-------------------|------------|
+| Variable | Example (GAF) | Your value |
+|----------|--------------|------------|
 | [PROJECT_NAME] | gaf-sales-platform | |
 | [ENTITY_NAME] | contractor | |
 | [ENTITY_TYPE] | roofing contractor | |
@@ -610,20 +696,31 @@ Timeline (4 hours):
 | [MAIN_CATEGORY] | tier | |
 | [KEY_FIELD_1] | tier | |
 | [KEY_FIELD_2] | rating | |
-| [KEY_FIELD_3] | certifications | |
-| [KEY_FIELD_4] | years in business | |
 | [FILTER_1] | tier | |
 | [FILTER_2] | min_rating | |
-| [RELEVANT_FILTER_1] | tier | |
-| [RELEVANT_FILTER_2] | min_rating | |
 | [ZIP_CODE] | 10013 | |
+
+---
+
+## 1-HOUR PRESENTATION STRUCTURE
+
+```
+0:00–0:05   Intro — who you are, what you built, live URL
+0:05–0:20   Live demo — rep dashboard → filter → card → insight panel → manager view
+0:20–0:30   Architecture slide — each layer, each decision
+0:30–0:40   Data pipeline slide — scraping approach + why, incremental refresh, quality
+0:40–0:50   AI + evaluation slide — 5 insight types, prompt design, scoring, flagging loop
+0:50–0:55   Scalability slide — Postgres migration, new territories, new insight types
+0:55–1:00   Q&A
+```
 
 ---
 
 ## IF YOU RUN OUT OF TIME — Cut In This Order
 
-1. Cut manager dashboard charts (keep the flagged insights list)
-2. Cut CSV export endpoint
-3. Cut incremental refresh in scraper (full re-scrape only)
+1. Cut manager dashboard charts (keep flagged insights list)
+2. Cut CSV export
+3. Cut incremental refresh (full re-scrape only)
 4. Cut docker-compose.yml
-5. NEVER cut: InsightPanel, FilterBar, automated evaluator, EVALUATION.md, the talking_point field
+5. Cut search endpoint
+6. NEVER cut: InsightPanel, FilterBar, talking_point field, automated evaluator, EVALUATION.md, the presentation deck
