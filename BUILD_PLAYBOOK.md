@@ -1,42 +1,210 @@
-# Conversational AI Agent — Build Playbook
-# Based on: PartSelect Chat Agent
+# Conversational AI Agent — Senior Build Playbook
+# Based on: PartSelect Chat Agent Architecture
 
-All prompts used to build this project from scratch, in order.
-Copy-paste each one directly. Replace [BRACKETED] values before pasting.
-Parallel steps are marked — open a second Claude session and run both simultaneously.
-
----
-
-## BEFORE YOU START
-
-Confirm you have:
-- Python 3.11+
-- Node.js 18+
-- An Anthropic API key
-- The data source URL and a strategy for scraping it (see scraping section)
-
-Fill in your variables:
-- [PROJECT_NAME] — e.g. partselect-agent
-- [DOMAIN] — e.g. refrigerator and dishwasher parts
-- [DATA_SOURCE] — e.g. PartSelect.com
-- [ENTITY] — e.g. part, product, listing
-- [SCOPE] — e.g. refrigerators and dishwashers
+Full prompt sequence to build, audit, and ship a production-grade AI agent.
+Every prompt is copy-paste ready. Replace [BRACKETED] values before pasting.
+Parallel agent steps are marked — open additional Claude sessions and run simultaneously.
 
 ---
 
-## PROMPT 1 — Project Scaffold
+## HOW TO USE THIS PLAYBOOK
+
+There are four types of prompts:
+- **PLAN** — PM-level: requirements, architecture, prioritization. Run before writing any code.
+- **BUILD** — Engineer-level: implement a specific component.
+- **AUDIT** — Senior engineer review: read the code, find issues, fix them.
+- **PARALLEL** — Run this in a separate Claude session simultaneously with the adjacent prompt.
+
+Read all PLAN prompts first. Do not skip them. They take 20 minutes total and prevent 2 hours of rework.
+
+---
+
+## VARIABLES — Fill These In Before Starting
+
+| Variable | PartSelect Example | Your Value |
+|----------|-------------------|------------|
+| [PROJECT_NAME] | partselect-agent | |
+| [DOMAIN] | appliance parts | |
+| [DATA_SOURCE] | PartSelect.com | |
+| [ENTITY] | part | |
+| [ENTITIES] | parts | |
+| [SCOPE] | refrigerators and dishwashers | |
+| [CATEGORY_1] | refrigerator | |
+| [CATEGORY_2] | dishwasher | |
+| [BRAND_COLOR] | #e8651a | |
+| [PRIMARY_USER] | appliance repair customer | |
+| [BUSINESS_GOAL] | help customers find and buy the right part | |
+| [CART_URL] | partselect.com/shopping-cart/ | |
+
+---
+
+## PHASE 0 — PLAN: PM REQUIREMENTS (Run before any code. 15 minutes.)
+
+### PROMPT P1 — Product Requirements Document
 
 ```
-Create a full project scaffold for [PROJECT_NAME], a Claude-powered conversational AI agent for [DOMAIN].
+Act as a senior product manager. Write a complete PRD for [PROJECT_NAME].
+
+Context: [PROJECT_NAME] is a conversational AI agent that helps [PRIMARY_USER] with [BUSINESS_GOAL] on [DATA_SOURCE]. It is scoped to [SCOPE].
+
+Write the PRD with these sections:
+
+1. PROBLEM STATEMENT
+   - What the user cannot do today with [DATA_SOURCE]'s existing search
+   - What a [PRIMARY_USER] actually knows when they arrive (symptom, not part number)
+   - Business cost of the current gap (abandonment, wrong purchases, support calls)
+
+2. USER PERSONAS
+   Define 3 personas with name, goal, what they know, what they do not know:
+   - Primary: [PRIMARY_USER] who knows the symptom
+   - Secondary: [PRIMARY_USER] who has a model number
+   - Power user: technician or pro who knows the part number
+
+3. USER STORIES (MoSCoW priority)
+   Must Have:
+   - As a [persona], I want to [action] so that [outcome]
+   Write 5 Must Have stories.
+   Should Have: 3 stories.
+   Could Have: 2 stories.
+   Will Not Have (this version): 2 explicit exclusions.
+
+4. SUCCESS METRICS
+   Define exactly how you will measure success. For each metric:
+   - What it measures
+   - How to instrument it
+   - What good looks like (target value)
+   Write 5 metrics covering: task completion, accuracy, performance, scope adherence, user satisfaction.
+
+5. SCOPE BOUNDARY
+   List exactly what the agent will and will not answer.
+   For out-of-scope queries: what should it say? Write the exact decline message.
+
+6. ACCEPTANCE CRITERIA
+   For the MVP to be considered done:
+   - List 8 specific, testable criteria
+   - Each criterion must be a binary pass/fail
+
+Save this as REQUIREMENTS.md at the project root.
+```
+
+---
+
+### PROMPT P2 — Architecture Decision Record
+
+```
+Act as a principal engineer. Write a complete architecture decision record for [PROJECT_NAME].
+
+For each decision below, write: the options considered, the decision made, and the reasoning. Be specific — cite latency numbers, cost numbers, or maintenance tradeoffs.
+
+DECISIONS TO DOCUMENT:
+
+1. AI Framework
+   Options: LangChain agent, custom tool-use loop, OpenAI function calling, LlamaIndex
+   Decision: [choose and justify]
+   Consider: how many lines of code, what breaks when the API changes, debugging transparency
+
+2. Vector Search
+   Options: FAISS (local), Pinecone, Weaviate, pgvector, ChromaDB
+   Decision: [choose and justify]
+   Consider: setup time, cost at 10k records, latency, dependency complexity
+
+3. Embedding Model
+   Options: OpenAI text-embedding-3-small, all-MiniLM-L6-v2 (local), BGE-small
+   Decision: [choose and justify]
+   Consider: cost per embed, inference latency, dimension size, CPU vs GPU requirement
+
+4. Streaming Approach
+   Options: SSE (server-sent events), WebSocket, polling
+   Decision: [choose and justify]
+   Consider: HTTP/2 compatibility, reconnection handling, Railway/Vercel proxy behavior, implementation complexity
+
+5. Data Storage
+   Options: SQLite, Postgres, MongoDB, DynamoDB, flat JSON files
+   Decision: [choose and justify]
+   Consider: query patterns needed, migration path, hosting cost, concurrent access
+
+6. Frontend State Management
+   Options: Redux, Zustand, Jotai, React Context + useReducer, useState only
+   Decision: [choose and justify]
+   Consider: cart sync with SSE events, localStorage persistence, bundle size
+
+7. Scraping Approach
+   Options: Direct HTTP + BeautifulSoup, Playwright, API reverse engineering (DevTools), Wayback Machine CDX API
+   Decision: [choose and justify]
+   Consider: CDN blocking, rate limiting, data freshness, legal/ToS compliance
+
+8. Deployment
+   Options: Railway + Vercel, Fly.io + Vercel, AWS EC2 + S3, Render, Heroku
+   Decision: [choose and justify]
+   Consider: Docker support, free tier, cold start, always-on, cost at demo scale
+
+Save as ARCHITECTURE.md at the project root.
+Write a summary table at the top: Decision | Choice | Key Reason (one line each).
+```
+
+---
+
+### PROMPT P3 — System Design and Data Model
+
+```
+Act as a senior systems engineer. Produce the full system design for [PROJECT_NAME].
+
+SECTION 1 — SYSTEM DIAGRAM
+Draw an ASCII architecture diagram showing every component and how they connect:
+- Browser (Next.js frontend)
+- FastAPI backend (routes, middleware, rate limiter, session manager)
+- Agent loop (Claude tool-use)
+- 8 tools and what data source each hits
+- SSE stream direction
+- Data files loaded at startup
+- Scraper pipeline (offline, not part of request path)
+
+Label every arrow with the protocol and data format (e.g. "HTTP POST JSON", "SSE text/event-stream", "FAISS cosine search").
+
+SECTION 2 — DATA FLOW
+Write a numbered step-by-step trace for this exact request: "My GE refrigerator is leaking water"
+From browser click → SSE stream complete. Include every function call, every data lookup, every SSE event emitted. Be specific about latencies at each step.
+
+SECTION 3 — DATA MODEL
+For each data file the system uses, specify:
+- Filename
+- Format (JSON array / JSON dict / binary)
+- Key structure (for maps: what is the key, what is the value)
+- Approximate size at demo scale
+- How it is built (which scraper script, which step)
+- How it is loaded (at startup / per request / cached)
+
+SECTION 4 — API CONTRACT
+Document every API endpoint:
+Method | Path | Request body / query params | Response shape | Status codes | Notes
+
+SECTION 5 — SCALABILITY ANALYSIS
+For each of these scale scenarios, describe what breaks first and how to fix it:
+- 10x more data (60,000 [entities] instead of 6,000)
+- 100 concurrent users
+- Adding 3 more [SCOPE] categories
+- Daily data refresh requirement
+
+Save as DESIGN.md at the project root.
+```
+
+---
+
+## PHASE 1 — BUILD: SCAFFOLD + DATA
+
+### PROMPT B1 — Project Scaffold
+
+```
+Create the full project scaffold for [PROJECT_NAME]. Use the architecture and design decisions from ARCHITECTURE.md and DESIGN.md.
 
 Stack:
 - Backend: FastAPI (Python 3.11), async, SSE streaming
-- AI: Anthropic claude-sonnet-4-6 via the Anthropic Python SDK, tool-use loop
+- AI: Anthropic claude-sonnet-4-6, native tool-use loop (no LangChain)
 - Frontend: Next.js 14 App Router, TypeScript, Tailwind CSS
-- Search: FAISS vector index with sentence-transformers
-- Scraper: Python with httpx, asyncio, BeautifulSoup4
+- Search: FAISS IndexFlatIP + all-MiniLM-L6-v2 embeddings
+- Scraper: Python httpx + asyncio + BeautifulSoup4
 
-Directory structure — create all files as empty stubs:
+Create this directory structure with all files as empty stubs:
 
 [PROJECT_NAME]/
   backend/
@@ -46,11 +214,12 @@ Directory structure — create all files as empty stubs:
       models.py
       tools.py
       claude_client.py
-    data/              (empty — populated by scraper)
+    data/
     requirements.txt
     .env
     .env.example
     Dockerfile
+    .dockerignore
   frontend/
     src/
       app/
@@ -77,624 +246,614 @@ Directory structure — create all files as empty stubs:
     scrape_data.py
     build_index.py
     embed_and_index.py
+  REQUIREMENTS.md   (from P1)
+  ARCHITECTURE.md   (from P2)
+  DESIGN.md         (from P3)
   README.md
 
-After creating the structure:
+Steps:
 1. cd frontend && npx create-next-app@latest . --typescript --tailwind --app --yes
 2. cd backend && pip install fastapi uvicorn anthropic sentence-transformers faiss-cpu httpx beautifulsoup4 python-dotenv numpy pydantic
-3. Write backend/requirements.txt with all packages pinned
+3. Write backend/requirements.txt with all packages pinned to current versions
+4. Write frontend/tailwind.config.ts extending colors with brand-[PROJECT_NAME]: "[BRAND_COLOR]"
 
-Confirm every file exists.
+Confirm every file and directory exists. Print the full tree.
 ```
 
 ---
 
-## PROMPT 2 — Scraper: Capture the Data
+### PROMPT B2 — Scraper (START THIS FIRST — it takes 30-45 minutes)
 
 ```
 Build the data scraper in scraper/scrape_data.py for [PROJECT_NAME].
 
-SCRAPING STRATEGY FOR [DATA_SOURCE]:
+SCRAPING APPROACH:
+[PASTE ONE OF THESE BASED ON WHAT YOU FOUND IN DEVTOOLS — delete the others]
 
-[DATA_SOURCE] blocks direct CDN access. Use the Wayback Machine CDX API as the data source.
+--- API APPROACH (found an API call in DevTools Network tab) ---
+Here is the cURL command I captured:
+[PASTE FULL CURL]
+Here is a sample response:
+[PASTE RAW JSON]
+Pagination: [field name and logic]
 
-The CDX API works as follows:
-- URL: http://web.archive.org/cdx/search/cdx
-- Params: url=[domain]/[path]*, output=json, fl=original,timestamp,statuscode, filter=statuscode:200, collapse=urlkey, limit=50000
-- This returns a list of all archived URLs matching the pattern
-- To fetch a page: http://web.archive.org/web/[timestamp]/[original_url]
+--- SITEMAP APPROACH ---
+Sitemap URL: [URL]
+Entity URL pattern: [pattern]
+Fields to extract from each page: [list]
 
-Build the scraper in three phases:
+--- BEAUTIFULSOUP APPROACH ---
+Page URL: [URL pattern]
+HTML selectors: [describe structure]
 
-Phase 1 — discover_urls():
-  Call the CDX API with the pattern for [ENTITY] pages on [DATA_SOURCE]
-  Parse the response to extract original URLs and timestamps (use most recent snapshot)
-  Save URL list to scraper/data/urls.json
-  Print total URLs found
+--- WAYBACK MACHINE APPROACH (when direct access is blocked) ---
+The target site blocks automated access. Use the Wayback Machine CDX API.
+CDX endpoint: http://web.archive.org/cdx/search/cdx
+Params: url=[DOMAIN]/[PATH]*, output=json, fl=original,timestamp,statuscode, filter=statuscode:200, collapse=urlkey, limit=50000
+Fetch archived pages: http://web.archive.org/web/[timestamp]/[original_url]
+Parse HTML from archived snapshots with BeautifulSoup.
 
-Phase 2 — scrape_page(url, timestamp):
-  Fetch the archived snapshot via httpx
-  Parse HTML with BeautifulSoup
-  Extract these fields: [LIST YOUR FIELDS — e.g. name, part_number, price, brand, category, symptoms, compatible_models, rating, review_count, image_url, description, install_difficulty]
-  Return a dict or None if the page cannot be parsed
+REQUIREMENTS (apply to all approaches):
+1. CLI: --zip [VALUE] --radius [MILES] or equivalent territory param
+2. Async with httpx.AsyncClient, semaphore(5) concurrent requests
+3. Retry: 3 attempts, backoff 2s / 6s / 18s. On 429: wait 60s.
+4. Parse each record into a dict with fields: [LIST YOUR FIELDS]
+5. Save all records to scraper/data/raw.json as a JSON array
+6. Log data quality issues per record to scraper/data/quality_issues.json
+7. tqdm progress bar
+8. Final print: X scraped, Y failed, Z quality issues
 
-Phase 3 — run():
-  Load urls.json
-  Use asyncio with semaphore(5) for concurrent fetching
-  Retry failed fetches up to 3 times with 2s backoff
-  Save all scraped records to scraper/data/parts_raw.json as a JSON array
-  Print progress with tqdm
-  Print final count: X scraped, Y failed
-
-Run as: python scrape_data.py
+Run as: python scrape_data.py [--zip 10013] [--force]
 ```
 
 ---
 
-## PROMPT 3 — Build Relational Maps
+## PHASE 1 PARALLEL — Run B3 and B4 simultaneously while B2 scrapes
+
+### PROMPT B3 — Relational Maps (PARALLEL with B4)
 
 ```
-Build the relational index builder in scraper/build_index.py for [PROJECT_NAME].
+Build the relational index in scraper/build_index.py for [PROJECT_NAME].
 
-Input: scraper/data/parts_raw.json (array of scraped [ENTITY] records)
+Input: scraper/data/raw.json
 
-Build these lookup maps and save each as a JSON file in scraper/data/:
+Build and save these JSON files to scraper/data/:
 
-1. [entity]_by_id.json — dict mapping each unique entity ID to the full record
+1. entities_by_id.json
+   Dict: source_id → full record dict
 
-2. symptom_[entity]_map.json — dict mapping normalized symptom strings to lists of entity IDs
-   Normalize symptoms: lowercase, strip punctuation, collapse whitespace
-   Key format: "[category]|[symptom]" e.g. "refrigerator|ice maker not making ice"
-   Only include symptoms with at least 1 character after normalization
+2. symptom_map.json
+   Dict: "[category]|[normalized_symptom]" → [list of entity IDs]
+   Normalize: lowercase, remove punctuation, collapse whitespace, strip
+   Only include keys with 4+ chars after normalization
+   Source: each record's symptoms array
 
-3. [entity]_type_map.json — dict mapping part type categories to lists of entity IDs
-   Use keyword matching on the entity name to classify into categories
-   Categories: [LIST YOUR CATEGORIES — e.g. "ice makers", "water filters", "door gaskets", "drain pumps"]
-   For each category, also track which brands have entities in that category
+3. type_map.json
+   Dict: "[category]|[part_type]" → {"parts": [IDs], "brands": [brands], "count": int}
+   Classify by keyword matching on entity name:
+   [LIST YOUR KEYWORD→TYPE MAPPINGS, e.g. "ice maker" → "ice makers", "door gasket" → "door gaskets"]
 
-4. model_[entity]_map.json — dict mapping appliance model numbers to lists of compatible entity IDs
-   For each model, also store the category (e.g. refrigerator / dishwasher)
-   Source: each entity record's compatible_models array
+4. model_map.json
+   Dict: model_number → {"parts": [IDs], "category": str}
+   Source: each record's compatible_models array
 
-5. brand_appliance_map.json — dict mapping "[brand]|[category]" to lists of entity IDs
-   e.g. "GE|refrigerator", "Bosch|dishwasher"
+5. brand_map.json
+   Dict: "[brand]|[category]" → [list of entity IDs]
 
-After building all maps, print a summary:
+After building, print summary:
 - Total entities
-- Symptom map: X keys, Y total refs
+- Symptom map: X keys, Y total part references
 - Type map: X keys
 - Model map: X models
-- Brand map: X brand+category combinations
-
-Save all files to scraper/data/. Do not modify parts_raw.json.
+- Brand map: X combinations
 ```
 
 ---
 
-## PROMPT 4 — FAISS Vector Index
+### PROMPT B4 — FastAPI Backend + Tools (PARALLEL with B3)
 
 ```
-Build the FAISS vector indexer in scraper/embed_and_index.py for [PROJECT_NAME].
+Build the complete FastAPI backend for [PROJECT_NAME].
 
-Input: scraper/data/parts_raw.json
+FILE 1 — backend/app/tools.py:
+
+Load all data files at module level (once at import, not per request):
+_DATA_DIR = Path(__file__).parent / "data"
+Load: faiss_index (faiss.read_index), parts_metadata (json list), symptom_map, type_map, model_map, brand_map
+Load embedding model: SentenceTransformer("all-MiniLM-L6-v2")
+
+Implement 8 tools:
+
+search_catalog(query, category=None, brand=None) → list
+  Embed query, normalize vector, FAISS search top 10, filter by category/brand
+
+get_[entity]_details(id: str) → dict
+  Try live fetch from [DATA_SOURCE] first
+  On failure: fetch from Wayback Machine archive
+  Parse HTML, return full details dict
+  On total failure: return {"error": "not found"}
+
+check_model_compatibility(model_number: str) → dict
+  Look up in model_map
+  Return {"model": str, "category": str, "compatible_parts": [full metadata dicts]}
+  If not in map: try live scrape, return {"error": "not found"} if both fail
+
+find_parts_by_symptom(symptom: str, category=None) → list
+  Normalize symptom, fuzzy match against symptom_map keys (substring match)
+  Aggregate and deduplicate matching part IDs
+  Return up to 15 full metadata dicts
+
+find_parts_by_type(part_type: str, category=None, brand=None) → list
+  Match against type_map keys, filter, return up to 15 dicts
+
+find_parts_by_brand(brand: str, category=None) → list
+  Match against brand_map, return up to 20 dicts
+
+manage_cart(session_id: str, action: str, part_number=None, name=None, price=None) → dict
+  _carts: dict[str, list] at module level
+  Actions: add (append or increment qty), remove, view, clear
+  Always return {"items": [...], "total": float, "count": int}
+
+get_order(order_id=None) → dict
+  Return message directing to [DATA_SOURCE] order tracking
+
+Also write TOOL_DEFINITIONS list for Anthropic API tool_use.
+Each tool: name, description (when Claude should call it), input_schema.
+
+FILE 2 — backend/app/claude_client.py:
+
+SYSTEM_PROMPT: assistant for [DATA_SOURCE] specializing in [SCOPE]
+Include explicit tool selection guide (one line per tool: "if user gives X → call Y")
+Scope boundary: decline everything outside [SCOPE] with: "I'm specialized in [SCOPE] — I can't help with [topic], but I'd be happy to help you find the right [ENTITY] for your appliance."
+
+run_agent(messages: list, session_id: str) → AsyncGenerator[str, None]:
+  client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+  Loop:
+    Call client.messages.create (not streaming — tool-use loop)
+    Parse content blocks → text_content, tool_uses
+    If tool_uses: yield SSE tool_call events, execute tools via asyncio.gather, yield parts/cart_sync events, append to conversation, continue loop
+    If no tool_uses: stream text in word chunks, yield done event, return
+  Retry 429/529 with delays [1, 3] seconds
+  Outer except: yield error SSE, yield done SSE, return
+
+_normalise_part(p) → dict: consistent shape for frontend
+_sse(payload) → str: "data: {json}\n\n"
+_stream_text(text) → Generator: buffer ~4 chars, yield word-boundary chunks
+
+FILE 3 — backend/app/main.py:
+
+Rate limiter: 20 req/60s sliding window per IP using X-Forwarded-For
+CORSMiddleware: origins from ALLOWED_ORIGINS env var
+POST /chat → StreamingResponse(run_agent(...), media_type="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+GET /health → {"status":"ok"}
+GET /image-proxy?url= → proxy [DATA_SOURCE] images through Wayback CDN, validate domain
+init_db equivalent: confirm data files exist on startup, log counts
+
+FILE 4 — backend/app/models.py:
+ChatMessage, ChatRequest, CartItem Pydantic models
+```
+
+---
+
+### AUDIT A1 — Backend Code Review (Run after B4, PARALLEL with B5)
+
+```
+Act as a senior software engineer performing a code review of the [PROJECT_NAME] backend.
+
+Read every file in backend/app/ and audit for:
+
+CORRECTNESS:
+- Are all 8 tools returning the right shape? Check against TOOL_DEFINITIONS input_schema.
+- Does the agent loop handle the case where Claude returns text AND tool_use in the same response?
+- Does manage_cart correctly handle duplicate part_number (should increment quantity, not add duplicate)?
+- Does the rate limiter use X-Forwarded-For correctly when behind Railway's proxy?
+- Does the image proxy validate the URL domain to prevent SSRF?
+- Is ANTHROPIC_API_KEY checked at startup with a clear error if missing?
+
+PERFORMANCE:
+- Are all data files loaded once at module level, not per request?
+- Is the FAISS index loaded once, not reloaded per search?
+- Is the embedding model loaded once, not reloaded per search?
+- Are tool executions in the agent loop using asyncio.gather (parallel) not sequential awaits?
+
+SECURITY:
+- Is ALLOWED_ORIGINS validated against a whitelist pattern?
+- Does the image proxy prevent open redirect (only allow known domains)?
+- Are there any os.system() or subprocess calls with user input?
+- Is raw_json stored safely (no eval, no exec on stored data)?
+
+ROBUSTNESS:
+- Does every tool catch exceptions and return {"error": str(e)} rather than raising?
+- Does the agent loop have an outer try/except that catches any uncaught exception and yields a clean error SSE?
+- Does the SSE stream always end with a "done" event, even on error?
+
+For each issue found: file path, line number (estimate), description of the bug, exact fix.
+Apply all fixes. Print a summary of what was changed.
+```
+
+---
+
+## PHASE 2 — BUILD: FAISS INDEX + FRONTEND (Run after B2 scraping finishes)
+
+### PROMPT B5 — FAISS Vector Index
+
+```
+Build the FAISS indexer in scraper/embed_and_index.py for [PROJECT_NAME].
+
+Input: scraper/data/raw.json
 
 Steps:
+1. Load all records from raw.json
+2. Build embedding text per record: "[name] [category] [brand] [description] [symptoms joined with space]" — max 512 tokens
+3. Load SentenceTransformer("all-MiniLM-L6-v2") — 384 dimensions, CPU only
+4. Embed in batches of 64 with show_progress_bar=True
+5. Normalize all vectors: v = v / np.linalg.norm(v, axis=1, keepdims=True)
+6. Build IndexFlatIP (inner product on normalized = cosine similarity)
+7. Add all vectors
+8. faiss.write_index(index, "scraper/data/faiss_index.bin")
+9. Build metadata list — same order as FAISS index. For each record keep only frontend-needed fields:
+   id, name, price, brand, category, image_url, url, rating, review_count, symptoms (first 5), install_difficulty, install_time, video_url, description (truncated 300 chars)
+   Save as scraper/data/parts_metadata.json
 
-1. Load all records from parts_raw.json
-2. For each record, build an embedding text string combining the most descriptive fields:
-   "[name] [category] [brand] [description] [symptoms joined with space]"
-   Keep it under 512 tokens per record
-3. Load sentence-transformers model: all-MiniLM-L6-v2
-   This model outputs 384-dimensional vectors, runs on CPU, no GPU needed
-4. Embed all records in batches of 64 using model.encode(batch, show_progress_bar=True)
-5. Normalize vectors for cosine similarity: vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-6. Build FAISS IndexFlatIP (inner product = cosine similarity on normalized vectors)
-7. Add all vectors to the index
-8. Save: faiss.write_index(index, "scraper/data/faiss_index.bin")
-9. Save metadata: for each record save the fields the backend needs at query time
-   (id, name, price, brand, category, image_url, url, rating, review_count, symptoms, install_difficulty)
-   Save as scraper/data/parts_metadata.json in the same order as the FAISS index
+10. Copy to backend/app/data/:
+    faiss_index.bin, parts_metadata.json, symptom_map.json, type_map.json, model_map.json, brand_map.json
 
-After saving:
-Copy these files to backend/app/data/:
-  faiss_index.bin
-  parts_metadata.json
-  symptom_[entity]_map.json
-  [entity]_type_map.json
-  model_[entity]_map.json
-  brand_appliance_map.json
-
-Print: total vectors indexed, index size, output files written.
-
+Print: total vectors, index size on disk, files copied.
 Run as: python embed_and_index.py
 ```
 
 ---
 
-## PROMPT 5 — Backend Tools
+### PROMPT B6 — Frontend Types, API Client, State (PARALLEL with B7)
 
 ```
-Build the 8 tools in backend/app/tools.py for [PROJECT_NAME].
-
-These tools are thin data accessors. Each one loads data from the JSON files in backend/app/data/ at module startup (not per request). All data loading happens once when the module is imported.
-
-DATA LOADING at module level:
-_DATA_DIR = Path(__file__).parent / "data"
-Load at import time: faiss_index, parts_metadata (list of dicts), symptom_map, type_map, model_map, brand_map
-Also load the sentence-transformers model (all-MiniLM-L6-v2) for semantic search
-
-IMPLEMENT THESE 8 TOOLS:
-
-1. search_catalog(query: str, category: str = None, brand: str = None) -> list
-   Embed the query with the same model used during indexing
-   Normalize the query vector
-   Search FAISS index for top 10 results
-   Filter by category and brand if provided
-   Return list of matching [entity] metadata dicts
-
-2. get_[entity]_details(part_number: str) -> dict
-   First try: fetch the live page from [DATA_SOURCE] directly
-   If that fails (CDN block, timeout): fetch from Wayback Machine archive
-   Parse the HTML and return full details
-   Include: name, price, description, symptoms, compatible_models, rating, review_count, install_difficulty, image_url, url
-
-3. check_model_compatibility(model_number: str) -> dict
-   Look up model_number in model_map
-   If found: return {"model": model_number, "category": category, "compatible_parts": [list of full part dicts from metadata]}
-   If not found: try a live scrape of [DATA_SOURCE]/models/[model_number]
-   Return {"model": model_number, "compatible_parts": [], "error": "not found"} if both fail
-
-4. find_parts_by_symptom(symptom: str, category: str = None) -> list
-   Normalize the symptom string (lowercase, strip punctuation)
-   Search symptom_map for keys containing the normalized symptom
-   Combine all matching part IDs, deduplicate
-   Return up to 15 matching part metadata dicts
-
-5. find_parts_by_type(part_type: str, category: str = None, brand: str = None) -> list
-   Normalize part_type
-   Search type_map for matching keys
-   Filter by category and brand if provided
-   Return up to 15 matching part metadata dicts
-
-6. find_parts_by_brand(brand: str, category: str = None) -> list
-   Normalize brand name
-   Look up in brand_map using "[brand]|[category]" key pattern
-   Return up to 20 matching part metadata dicts
-
-7. manage_cart(session_id: str, action: str, part_number: str = None, name: str = None, price: float = None) -> dict
-   actions: "add", "remove", "view", "clear"
-   Store cart in a module-level dict keyed by session_id: _carts: dict[str, list]
-   add: append {part_number, name, price, quantity:1} or increment quantity if already in cart
-   remove: remove item by part_number
-   view: return current cart
-   clear: empty the cart
-   Always return {"items": [...], "total": float, "count": int}
-
-8. get_order(order_id: str = None) -> dict
-   Return a message explaining that live order lookup is not available
-   Direct user to [DATA_SOURCE] order tracking page
-
-Each tool must:
-- Have a docstring explaining when Claude should call it
-- Catch all exceptions and return {"error": str(e)} rather than raising
-- Be importable and callable standalone for testing
-
-Also write TOOL_DEFINITIONS list — the tool definitions array passed to the Anthropic API.
-Each definition needs: name, description (when to use it), input_schema with all parameters typed.
-```
-
----
-
-## PROMPT 6 — Agent Loop and SSE Streaming
-
-```
-Build the Claude agent loop and SSE streaming in backend/app/claude_client.py for [PROJECT_NAME].
-
-This file implements the core agentic loop using the Anthropic Python SDK.
-
-SYSTEM PROMPT:
-Write a system prompt that:
-1. Defines the assistant's role: helpful agent for [DATA_SOURCE] specializing in [SCOPE]
-2. Gives explicit tool selection guidance for each of the 8 tools (one line each — when to use it)
-3. States rules: always use tools before answering product questions, never invent part numbers or prices, cite [DATA_SOURCE], be concise, no emojis
-4. States scope boundary: only answer questions about [SCOPE]. For everything else, politely decline with a specific message.
-
-AGENT LOOP — async generator function run_agent(messages: list, session_id: str):
-This is an async generator that yields SSE-formatted strings.
-
-Loop logic:
-1. Build conversation from messages list
-2. Call anthropic.AsyncAnthropic.messages.create with streaming=False (tool-use loop, not streaming tokens)
-   Use: model, max_tokens=4096, system=SYSTEM_PROMPT, tools=TOOL_DEFINITIONS, messages=conversation
-3. Parse response.content blocks — collect text blocks and tool_use blocks
-4. If tool_use blocks exist:
-   - For each tool: yield SSE event {"type": "tool_call", "content": tool_name}
-   - Execute all tools (use asyncio.gather for parallel execution)
-   - For tools that return parts/entities: yield SSE event {"type": "parts", "content": [list of normalized part dicts]}
-   - For manage_cart: yield SSE event {"type": "cart_sync", "content": cart_items}
-   - Append assistant message and tool results to conversation
-   - Loop back to step 2
-5. If no tool_use blocks (final response):
-   - Stream the text in word-sized chunks: split on whitespace, yield each chunk as {"type": "text", "content": chunk}
-   - Yield {"type": "done", "content": ""}
-   - Return (end generator)
-
-RETRY LOGIC — wrap the Anthropic API call:
-- On 429 or 529: wait 1s, 3s, then raise (max 3 attempts)
-- On other APIStatusError: yield error SSE and return
-
-PART NORMALIZATION — _normalise_part(p: dict) -> dict:
-Produce a consistent shape for the frontend:
-part_number, name, price (float), brand, category, image_url, url, description (truncated 300 chars),
-rating (float), review_count (int), availability, symptoms (first 5), install_difficulty, install_time, video_url
-
-SSE FORMAT — _sse(payload: dict) -> str:
-return f"data: {json.dumps(payload)}\n\n"
-
-TEXT STREAMING — _stream_text(text: str):
-Split on whitespace keeping delimiters, buffer to ~4 chars, yield each buffer as a chunk
-(This gives word-boundary streaming instead of character-by-character)
-
-SESSION CLEANUP — run a background task that clears carts older than 2 hours from _carts dict
-```
-
----
-
-## PROMPT 7 — FastAPI Main
-
-```
-Build the FastAPI backend entry point in backend/app/main.py for [PROJECT_NAME].
-
-SETUP:
-- FastAPI app with title "[PROJECT_NAME] API"
-- Load .env file on startup
-- CORSMiddleware: allow_origins from ALLOWED_ORIGINS env var (comma-split + strip), allow_methods=["*"], allow_headers=["*"], allow_credentials=True
-- Rate limiter: sliding window, 20 requests per 60 seconds per IP
-  Use X-Forwarded-For header to get real IP (Railway proxy passes this)
-  Store request timestamps in a module-level dict: _rate_data: dict[str, deque]
-  Return 429 with Retry-After header if limit exceeded
-
-MODELS (in backend/app/models.py):
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
-    session_id: Optional[str] = None
-
-class CartItem(BaseModel):
-    part_number: str
-    name: str
-    price: float
-    quantity: int = 1
-
-ROUTES:
-
-GET /health:
-  Return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
-
-POST /chat:
-  Body: ChatRequest
-  Generate a session_id if not provided (use uuid4)
-  Return StreamingResponse(run_agent(messages, session_id), media_type="text/event-stream")
-  Add headers: Cache-Control: no-cache, X-Accel-Buffering: no (disables nginx buffering)
-
-GET /image-proxy:
-  Query param: url (str)
-  Proxy image requests through the Wayback Machine CDN to avoid CORS issues with archived images
-  Only allow URLs from [DATA_SOURCE] domain
-  Return the image bytes with the correct content-type header
-  Cache responses for 1 hour
-
-All endpoints: proper error handling, log request method + path + status + duration
-```
-
----
-
-## PROMPT 8 — Frontend Types and API Client
-
-```
-Build the TypeScript types and API client for [PROJECT_NAME] frontend.
+Build the frontend foundation for [PROJECT_NAME].
 
 frontend/src/lib/types.ts:
 
-type ApplianceFilter = "all" | "[category1]" | "[category2]"
+type ApplianceFilter = "all" | "[CATEGORY_1]" | "[CATEGORY_2]"
 
 interface Part {
-  part_number: string
-  name: string
-  price: number
-  brand: string
-  category: string
-  image_url: string
-  url: string
-  description: string
-  rating: number
-  review_count: number
-  availability: string
-  symptoms: string[]
-  install_difficulty: string
-  install_time: string
-  video_url: string
+  part_number: string; name: string; price: number; brand: string; category: string
+  image_url: string; url: string; description: string; rating: number; review_count: number
+  availability: string; symptoms: string[]; install_difficulty: string; install_time: string; video_url: string
 }
 
-interface CartItem {
-  part_number: string
-  name: string
-  price: number
-  quantity: int
-}
+interface CartItem { part_number: string; name: string; price: number; quantity: number }
 
 interface Message {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  parts?: Part[]
-  error?: string
-  isStreaming?: boolean
-  toolCall?: string
-  timestamp: number
-  responseTimeMs?: number
+  id: string; role: "user" | "assistant"; content: string
+  parts?: Part[]; error?: string; isStreaming?: boolean
+  toolCall?: string; timestamp: number; responseTimeMs?: number
 }
 
-interface SSEEvent {
-  type: "text" | "parts" | "cart_sync" | "tool_call" | "done" | "error"
-  content: string | Part[] | CartItem[]
-}
+type SSEEventType = "text" | "parts" | "cart_sync" | "tool_call" | "done" | "error"
+interface SSEEvent { type: SSEEventType; content: string | Part[] | CartItem[] }
 
 frontend/src/lib/api.ts:
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL
+— never append trailing slash — causes //chat 404
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL (no trailing slash — this causes //chat 404)
+async function* streamChat(messages, sessionId): AsyncGenerator<SSEEvent>
+  POST ${BACKEND}/chat, body: {messages:[{role,content}], session_id}
+  Read as ReadableStream, TextDecoder
+  Parse SSE: lines starting "data: " → JSON.parse → yield SSEEvent
+  On any error: yield {type:"error", content: error.message}
 
-async function* streamChat(messages: Message[], sessionId: string): AsyncGenerator<SSEEvent>
-  POST to ${BACKEND_URL}/chat
-  Body: { messages: [{role, content}], session_id }
-  Read response as a ReadableStream
-  Parse SSE lines: lines starting with "data: " → parse JSON → yield as SSEEvent
-  Handle connection errors: yield {type: "error", content: error.message}
-  Track timing: record start time, include responseTimeMs in done event
-
-function getImageUrl(originalUrl: string): string
-  Return ${BACKEND_URL}/image-proxy?url=${encodeURIComponent(originalUrl)}
+function getImageUrl(url): string → ${BACKEND}/image-proxy?url=${encodeURIComponent(url)}
 
 frontend/src/lib/store.ts:
-Implement cart state management using React Context + useReducer (no external library):
-- State: { items: CartItem[], sessionId: string }
-- Actions: SET_CART (replaces entire cart from SSE cart_sync), CLEAR_CART
-- sessionId: generate once with crypto.randomUUID(), persist in localStorage
-- Cart items: persist in localStorage, restore on mount
-- Export: useCart() hook, CartProvider component
+Cart state via React Context + useReducer. No external library.
+State: { items: CartItem[], sessionId: string }
+Actions: SET_CART (replace entire cart — called on cart_sync SSE), CLEAR_CART
+sessionId: crypto.randomUUID() once, persisted in localStorage key "[PROJECT_NAME]-session"
+items: persisted in localStorage key "[PROJECT_NAME]-cart", restored on mount
+Export: CartProvider, useCart()
 ```
 
 ---
 
-## PROMPT 9 — Frontend Components
+### PROMPT B7 — All React Components (PARALLEL with B6)
 
 ```
-Build the React components for [PROJECT_NAME] frontend.
+Build all React components for [PROJECT_NAME].
 
-frontend/src/components/WelcomeScreen.tsx:
-Props: onSelect(query: string), filter: ApplianceFilter, onFilterChange(f: ApplianceFilter)
+WelcomeScreen.tsx:
+Props: onSelect(query), filter: ApplianceFilter, onFilterChange(f)
+Layout: centered max-w-xl py-12, fade-in animation
+- Brand icon in [BRAND_COLOR] square + h1 "[PROJECT_NAME] Assistant" + subtitle
+- Filter tab bar (underline active style): All | [CATEGORY_1] | [CATEGORY_2]
+- 4 suggestion chips per filter in 2-column grid. Each: label bold + query preview small gray line-clamp-1
+- Capabilities list: 5 items with lucide-react icons
 
-Layout: centered, max-w-xl, py-12
-- Logo/icon at top (wrench SVG in brand-orange square)
-- Heading: "[PROJECT_NAME] Assistant"
-- Subtitle: "Find the right [entity], check compatibility, and get help for your [SCOPE]."
-- Filter tabs: "All" | "[Category1]" | "[Category2]" — tab bar with underline active state
-- Suggestion chips: 4 per filter, 2-column grid
-  Each chip: label (bold) + query preview (small gray text, line-clamp-1)
-  On click: call onSelect(query)
-- Capabilities list: 5 items with icons (Search, CheckCircle, ShoppingCart, Wrench, Package)
+QUERIES — use only queries that return real data from the index:
+all: 4 verified queries
+[CATEGORY_1]: 4 verified queries
+[CATEGORY_2]: 4 verified queries
 
-QUERIES for each filter — use only verified queries that return real data:
-[all]: [PASTE 4 QUERIES THAT WORK]
-[category1]: [PASTE 4 QUERIES]
-[category2]: [PASTE 4 QUERIES]
-
-frontend/src/components/ToolCallIndicator.tsx:
+ToolCallIndicator.tsx:
 Props: toolName: string
-Render a small pill: spinner icon + human-readable label for the tool name
-Map tool names to labels: search_catalog → "Searching catalog", get_[entity]_details → "Looking up part", etc.
+Small pill with animated spinner. Map tool names to human labels:
+search_catalog → "Searching catalog"
+get_[entity]_details → "Looking up [entity]"
+check_model_compatibility → "Checking compatibility"
+find_parts_by_symptom → "Finding parts by symptom"
+find_parts_by_type → "Browsing part types"
+find_parts_by_brand → "Browsing by brand"
+manage_cart → "Updating cart"
 
-frontend/src/components/ProductCard.tsx:
-Props: part: Part, onAddToCart(part: Part): void
-Layout: white card, border-gray-200, rounded-xl, overflow-hidden
-- Image: use getImageUrl(), 160px height, object-cover, gray-100 background fallback
-- Body: name (font-medium), part_number (small gray), price (bold brand-orange), brand + category tags
-- Rating: star icons + review count if rating > 0
-- Install difficulty badge if present
-- "Add to cart" button: full width, brand-orange background
-- "View part" link: small gray text linking to original URL
+ProductCard.tsx:
+Props: part: Part, onAddToCart(part)
+White card, border-gray-200, rounded-xl
+- Image: getImageUrl(), h-40, object-cover, gray-100 bg fallback
+- name (font-medium), part_number (text-xs text-gray-400), price (font-bold text-[BRAND_COLOR])
+- brand + category small badges (gray-100 bg)
+- Rating: filled/empty stars + review count (if rating > 0)
+- Install difficulty badge (if present)
+- "Add to cart" button: full width, [BRAND_COLOR] bg, white text
+- "View part" link: text-xs text-gray-400 hover:text-[BRAND_COLOR]
 
-frontend/src/components/CartSidebar.tsx:
-Props: isOpen: boolean, onClose(): void
-Slide-in from right, backdrop overlay
-Header: "Cart" + X button + item count badge
-Items list: each item shows name, part_number, quantity, price
-Remove button per item (calls cart action)
-Footer: subtotal, "Checkout on [DATA_SOURCE]" button (links to [DATA_SOURCE] cart URL)
-Cart persists in localStorage via CartProvider
+CartSidebar.tsx:
+Props: isOpen, onClose
+Fixed right panel, backdrop overlay, slide-in transition
+Header: "Cart" + badge + X close
+Item list: name, part_number, qty, price, remove button (×)
+Footer: subtotal bold, "Checkout on [DATA_SOURCE]" button → [CART_URL]
+Empty state: gray message
 
-frontend/src/components/MessageBubble.tsx:
+MessageBubble.tsx:
 Props: message: Message
-User messages: right-aligned, gray-100 background, rounded-2xl
-Assistant messages: left-aligned, white, with avatar icon
-  - If isStreaming: show blinking cursor at end of content
-  - If toolCall: show ToolCallIndicator instead of content
-  - If parts array exists: render ProductCard grid below text (2 columns on desktop)
-  - If error: red border, error icon, "Try again" button
-  - Footer: response time in ms if present
+User: right-aligned, gray-100, rounded-2xl, max-w-[80%]
+Assistant: left-aligned with avatar icon, white bg
+  isStreaming + no content: show ToolCallIndicator(toolCall) or pulsing dots
+  content: render text (blinking cursor if isStreaming)
+  parts array: 2-col ProductCard grid below text
+  error: red border, error icon, "Try again" button that re-submits last message
+  footer: responseTimeMs + "s" in tiny gray text
 ```
 
 ---
 
-## PROMPT 10 — Chat Interface
+### AUDIT A2 — Frontend Component Review (Run after B6 + B7, PARALLEL with B8)
 
 ```
-Build the main ChatInterface component in frontend/src/components/ChatInterface.tsx for [PROJECT_NAME].
+Act as a senior frontend engineer reviewing [PROJECT_NAME] components.
 
-Props: none (reads from CartProvider context)
+Read all files in frontend/src/ and audit for:
 
-State:
-- messages: Message[] — conversation history
-- input: string — current input value
-- isLoading: boolean — waiting for first token
-- sessionId: string — from useCart() context
+CORRECTNESS:
+- Does the SSE stream parser handle partial chunks correctly? (ReadableStream can split a "data: ..." line across two chunks — the parser must buffer incomplete lines)
+- Does streamChat yield a final "done" event even if the backend sends no done event? (Add a timeout fallback)
+- Does manage_cart in CartSidebar handle quantity > 1 display? (show "×2" not two separate items)
+- Does ProductCard use getImageUrl() for all image src values? (not the raw URL which will be blocked by CORS)
+- Does WelcomeScreen actually disappear after the first message? (check the empty state condition)
+- Is sessionId stable across re-renders? (must come from localStorage, not useState with initial value)
 
-On mount: load messages from sessionStorage (persist conversation within tab)
+PERFORMANCE:
+- Are ProductCard images lazy-loaded? (add loading="lazy")
+- Is the message list virtualized or is it just a growing DOM? (for demo it's fine, note the limitation)
+- Does the messages area scroll to bottom on new content? (useEffect with ref.scrollIntoView)
+- Are components that don't need to re-render wrapped in memo()?
 
-SEND MESSAGE flow:
-1. Append user message to messages, clear input, set isLoading=true
-2. Create a placeholder assistant message with isStreaming=true
-3. Call streamChat(messages, sessionId)
-4. For each SSEEvent yielded:
-   - type "text": append content to placeholder message content, set isLoading=false
-   - type "parts": set parts array on placeholder message
-   - type "tool_call": set toolCall on placeholder message
-   - type "cart_sync": dispatch SET_CART action
-   - type "done": set isStreaming=false, record responseTimeMs
-   - type "error": set error on placeholder message, set isStreaming=false
-5. Save messages to sessionStorage
+DESIGN CONSISTENCY:
+- Is any color class in the codebase NOT in [gray-*, BRAND_COLOR, white, red/amber/green for status]? If yes, remove it.
+- Are there any emoji characters in component output? Remove them.
+- Is the font stack system-only (no Google Fonts import)?
 
-LAYOUT (full height, flex column):
-- Header: [PROJECT_NAME] logo/name left, clear-history trash icon + cart icon with badge count right
-- Messages area: flex-1, overflow-y-auto, scroll to bottom on new message
-  Padding: px-4, max-w-2xl mx-auto
-  Empty state: show WelcomeScreen
-- Input area: sticky bottom, white background, border-t
-  Textarea: auto-resize, max 4 rows, submit on Enter (Shift+Enter for newline)
-  Send button: brand-orange, disabled when empty or loading
-  Footer: small gray text — "[Specialized in [SCOPE]] · Always verify at [DATA_SOURCE]"
+ACCESSIBILITY:
+- Do all buttons have aria-label when they have no text (icon-only buttons)?
+- Does the textarea have a placeholder and aria-label?
+- Are cart items announced to screen readers when added?
 
-CLEAR HISTORY: trash icon in header clears messages from state and sessionStorage
-
-Export default memo(ChatInterface)
+For each issue: file, line estimate, problem, fix.
+Apply all fixes. List what changed.
 ```
 
 ---
 
-## PROMPT 11 — App Layout and Page
+## PHASE 3 — BUILD: CHAT INTERFACE + APP SHELL
+
+### PROMPT B8 — Chat Interface
+
+```
+Build ChatInterface in frontend/src/components/ChatInterface.tsx for [PROJECT_NAME].
+
+Props: none (uses useCart() context)
+
+Local state:
+- messages: Message[] (restore from sessionStorage on mount)
+- input: string
+- isLoading: boolean
+- abortController: AbortController | null (for cancelling in-flight requests)
+
+SEND MESSAGE:
+1. Validate input is not empty and not loading
+2. Create user message, append, clear input, set isLoading=true, scroll to bottom
+3. Create placeholder assistant message {id, role:"assistant", content:"", isStreaming:true, timestamp:Date.now()}
+4. Create AbortController, set state
+5. for await (const event of streamChat(messages, sessionId)):
+   - "text": update placeholder content (append), set isLoading=false
+   - "parts": update placeholder parts array
+   - "tool_call": update placeholder toolCall field
+   - "cart_sync": dispatch SET_CART(event.content)
+   - "done": set isStreaming=false, set responseTimeMs
+   - "error": set error field, set isStreaming=false
+6. Save messages to sessionStorage
+7. In finally: set isLoading=false, set abortController=null
+
+RETRY: "Try again" button in error MessageBubble calls handleSend with the same last user message content
+
+LAYOUT (h-screen flex flex-col):
+Header: logo left (brand icon + project name) | cart icon with badge count + trash icon right
+  Cart icon click: opens CartSidebar
+  Trash click: clear messages from state + sessionStorage
+
+Messages area: flex-1 overflow-y-auto px-4 py-6
+  Empty: WelcomeScreen (passes onSelect=handleSelect, filter, onFilterChange)
+  Non-empty: MessageBubble per message, ref on last bubble, useEffect scroll-to-bottom
+
+Input area: border-t bg-white px-4 py-3
+  Textarea: auto-resize (1-4 rows), onKeyDown Enter without Shift → submit
+  Submit button: [BRAND_COLOR] bg, disabled when empty or isLoading, spinner when isLoading
+  Footer text: "Specialised in [SCOPE] · Always verify at [DATA_SOURCE]"
+
+handleSelect(query): sets input = query, immediately calls handleSend
+```
+
+---
+
+### PROMPT B9 — App Layout and Page
 
 ```
 Build the Next.js app shell for [PROJECT_NAME].
 
 frontend/src/app/layout.tsx:
-- metadata: title "[PROJECT_NAME]", description "AI assistant for [SCOPE]"
-- Import globals.css
-- Wrap children in CartProvider
-- No other wrappers needed
+metadata: title "[PROJECT_NAME]", description "AI assistant for [SCOPE]"
+Wrap children in CartProvider
+No other providers, no global nav
 
 frontend/src/app/globals.css:
-- Tailwind base, components, utilities directives
-- Add CSS variable for brand color: --brand-orange: #e8651a (or your brand color)
-- Add @keyframes fade-in and animate-fade-in utility class for WelcomeScreen entrance
-- Custom scrollbar styles (thin, gray)
+@tailwind base; @tailwind components; @tailwind utilities;
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+Custom scrollbar: thin width, gray-200 track, gray-400 thumb
 
 frontend/tailwind.config.ts:
-- Extend colors: brand-orange: "#e8651a" (or your brand color)
-- Content paths include src/**
+extend colors: brand-[PROJECT_NAME]: "[BRAND_COLOR]"
+content: ["./src/**/*.{ts,tsx}"]
 
 frontend/src/app/page.tsx:
-Client component.
-State: filter (ApplianceFilter), cartOpen (bool)
-Renders:
-- ChatInterface (full height, handles everything)
-- CartSidebar (isOpen=cartOpen, onClose=setCartOpen(false))
-The cart icon in ChatInterface header sets cartOpen=true
+"use client"
+state: cartOpen (bool), filter (ApplianceFilter), filter passed down to ChatInterface via prop or context
+Render: ChatInterface + CartSidebar(isOpen=cartOpen, onClose)
+CartSidebar opened by header cart icon click in ChatInterface (use a callback prop or shared context)
 
 frontend/next.config.ts:
-- Allow image domains: web.archive.org, [DATA_SOURCE domain]
+images.remotePatterns: allow web.archive.org and [DATA_SOURCE domain]
 
-Run: npm run dev and confirm the welcome screen loads at localhost:3000
+Run npm run build and confirm zero TypeScript errors before continuing.
 ```
 
 ---
 
-## PROMPT 12 — README Files
+## PHASE 4 — AUDIT: FULL SYSTEM REVIEW
+
+### AUDIT A3 — Senior PM Acceptance Criteria Check (PARALLEL with A4)
+
+```
+Act as a senior product manager reviewing [PROJECT_NAME] against REQUIREMENTS.md.
+
+For each acceptance criterion in REQUIREMENTS.md, test it:
+1. Read the criterion
+2. Identify which file(s) implement it
+3. Determine: PASS (clearly implemented), FAIL (not implemented or broken), PARTIAL (partially done)
+4. For FAIL or PARTIAL: write the exact code change needed
+
+Also audit:
+- Are all 3 user personas served? For each persona, trace a realistic user journey through the code.
+- Are all Must Have user stories implemented? Read the story, find the implementation.
+- Does the scope boundary work? Find the exact code that enforces "only answer [SCOPE] questions."
+- Is the decline message exactly as specified in REQUIREMENTS.md?
+- Are the success metrics instrumentable? Is there any logging or tracking for each metric?
+
+Write a report: criteria status table, unmet stories list, gaps between spec and implementation.
+Fix all FAIL items. Note PARTIAL items for future work.
+```
+
+---
+
+### AUDIT A4 — Senior Engineer System Audit (PARALLEL with A3)
+
+```
+Act as a principal engineer performing a final system audit of [PROJECT_NAME].
+
+Read every file in the project. Report on:
+
+ARCHITECTURE COMPLIANCE:
+- Does the implementation match ARCHITECTURE.md decisions?
+- Is the tool-use loop actually a loop (not a single call)?
+- Are tools genuinely thin (no business logic, just data access)?
+- Does Claude compose tools across multiple turns for complex queries?
+- Is there any LangChain import anywhere? If yes, remove it.
+
+DATA INTEGRITY:
+- Are all 6 data files present in backend/app/data/ with non-zero sizes?
+- Does the FAISS index have the same number of vectors as parts_metadata.json entries?
+- Does symptom_map only contain normalized keys (no uppercase, no trailing punctuation)?
+- Do all part IDs in symptom_map/type_map/model_map/brand_map exist in parts_metadata?
+
+API CONTRACT:
+- Does POST /chat return Content-Type: text/event-stream?
+- Does every SSE event follow the format "data: {json}\n\n"?
+- Does the stream always end with a "done" event?
+- Does GET /health return 200 (not 500) even before any data is loaded?
+
+DEAD CODE:
+- List every function defined in backend/app/ that is never called
+- List every import in frontend/src/ that is unused
+- List any file in the project that is never imported or referenced
+
+ENVIRONMENT VARIABLE SAFETY:
+- Is ANTHROPIC_API_KEY never logged, never returned in API responses?
+- Is .env in .gitignore? Is .env.example committed but .env not committed?
+- Are there any hardcoded localhost URLs in the frontend? (should use NEXT_PUBLIC_BACKEND_URL)
+
+Apply all fixes. Commit with message "audit: senior engineer system review".
+```
+
+---
+
+## PHASE 5 — BUILD: DOCUMENTATION + DEPLOYMENT
+
+### PROMPT B10 — All README Files (PARALLEL with B11)
 
 ```
 Write four README files for [PROJECT_NAME].
 
 ROOT README.md:
-1. Live demo: [URL]
-2. One-paragraph description: what it does, what powers it, what data it uses
-3. Features list: what users can do (6 bullets)
-4. Architecture diagram (ASCII): Browser → Next.js → FastAPI → Claude API + FAISS + Data Maps
-5. Tech stack table: Layer | Technology | Why
-6. Quick start: backend (copy .env, pip install, uvicorn), scraper (run pipeline), frontend (npm install, npm run dev)
-7. Data coverage table: entities indexed, models mapped, category counts, top brands
-8. Known limitations table: 3 limitations with explanations
-9. Project structure tree
+1. Live demo badge: **Live:** https://[URL]
+2. One-paragraph description: conversational AI agent, Claude tool-use, FAISS, [DATA_SOURCE] data
+3. Features: what the user can do (6 bullets)
+4. Architecture ASCII diagram: every component, every connection labeled with protocol
+5. Tech stack table: Layer | Technology | Why (reference ARCHITECTURE.md decisions)
+6. Data coverage: entities indexed, models mapped, categories, brands — real numbers from the data
+7. Quick start: exact commands with copy-paste blocks
+8. Environment variables: table with name, required, default, description
+9. Project structure tree (2 levels deep)
+10. Known limitations: 3 real limitations with honest explanations
+11. What's next: 3 extensions with effort estimate (Low/Medium/High)
 
 backend/README.md:
-1. Setup and env vars table (name, required, description)
-2. API routes table: method, path, description
-3. Eight tools reference: tool name, what it does, when Claude calls it
-4. Data files the backend loads at startup and their sizes
-5. Session lifecycle: how sessions work, cart TTL
-6. Rate limiting: window, limit, how IPs are identified
+1. Setup and env vars table
+2. API routes: Method | Path | Description | Auth
+3. Eight tools reference: Name | Triggers when | Data source | Typical latency
+4. Data files loaded at startup: name, size, what it contains
+5. Session lifecycle: creation, cart TTL, cleanup
+6. Rate limiting: window, limit, per-IP logic
 
 frontend/README.md:
 1. Setup and env vars
-2. Component table: name, props, what it does
-3. SSE event types: type, content shape, what the frontend does with it
-4. Cart persistence: how localStorage is used, what the session ID is for
-5. Design decisions: color palette, no external UI library, why
+2. Component hierarchy diagram (ASCII)
+3. SSE event types table: type | content shape | what the frontend does
+4. Cart persistence: localStorage keys, what is stored, when it is cleared
+5. Design system: colors (only gray-* and brand color in product UI), no external UI library
 
 scraper/README.md:
-1. Pipeline steps in order with commands
-2. Why Wayback Machine (or your data source approach) — one paragraph
-3. Output files table: filename, size, what it contains
-4. Coverage stats
-5. No API keys required note (or list what's needed)
+1. Pipeline steps with exact commands in order
+2. Scraping approach explanation: why [APPROACH] was chosen over alternatives
+3. Output files table: filename | size | contents | what reads it
+4. Data coverage numbers
+5. Runtime estimate and any API keys needed
 ```
 
 ---
 
-## PROMPT 13 — Fix Design and Data Issues
+### PROMPT B11 — Deployment Config (PARALLEL with B10)
 
 ```
-Audit [PROJECT_NAME] for correctness issues before finalizing.
+Set up complete deployment for [PROJECT_NAME].
 
-Run these checks:
-
-1. VERIFY SUGGESTION QUERIES — for each query in WelcomeScreen.tsx:
-   Check that the query returns real data from the local index files.
-   For symptom queries: check symptom_map for the keyword, report part count.
-   For model number queries: check model_map for the exact model number, report part count.
-   For part number queries: check parts_metadata.json for the part number, report name and price.
-   Replace any query that returns 0 results with a verified working query.
-
-2. DESIGN AUDIT — read all files in frontend/src/components/:
-   Flag any color class that is not gray-*, not brand-orange, not white, not red/amber/green for status only.
-   Specifically: remove any text-blue-* or text-brand-blue from product UI — only use gray-900 and brand-orange.
-   Flag any emoji in component output.
-
-3. UNUSED DEPENDENCIES — check package.json and requirements.txt:
-   Remove any package that is imported nowhere in the codebase.
-   Run npm ls for frontend, pip list for backend — flag anything suspicious.
-
-4. DEAD CODE — scan backend/app/tools.py and backend/app/claude_client.py:
-   Remove any function that is defined but never called.
-   Remove any import that is unused.
-
-5. VERIFY DATA FILES — confirm backend/app/data/ contains all required files with non-zero sizes.
-   List each file and its size in KB.
-
-Report every issue found. Fix all of them. Commit the fixes.
-```
-
----
-
-## PROMPT 14 — Deployment
-
-```
-Deploy [PROJECT_NAME] to Railway (backend) and Vercel (frontend).
-
-STEP 1 — Prepare deployment config:
-
-backend/Dockerfile:
+FILE: backend/Dockerfile
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements.txt .
@@ -703,10 +862,14 @@ COPY . .
 EXPOSE 8000
 CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
 
-backend/.dockerignore:
-__pycache__, *.pyc, .env, .git
+FILE: backend/.dockerignore
+__pycache__
+*.pyc
+.env
+*.db
+.git
 
-railway.toml at REPO ROOT (not inside backend/ — Railway only reads this from root):
+FILE: railway.toml (at REPO ROOT — not inside backend/ — Railway reads this from root only)
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
@@ -717,112 +880,172 @@ healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-frontend/.env.local.example:
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8001
-
-backend/.env.example:
+FILE: backend/.env.example
 ANTHROPIC_API_KEY=
 ALLOWED_ORIGINS=http://localhost:3000
 
-STEP 2 — Push to GitHub:
-git add -A && git commit -m "Ready for deployment" && git push origin main
+FILE: frontend/.env.local.example
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8001
 
-STEP 3 — Deploy backend on Railway:
-1. railway.app → New Project → Deploy from GitHub
-2. Select repo. Set Root Directory = backend in service Settings
-3. Variables: add ANTHROPIC_API_KEY and ALLOWED_ORIGINS=https://[vercel-url].vercel.app
-4. Networking → Generate Domain → enter port 8080
-5. Watch Deploy Logs — wait for "Application startup complete" and GET /health 200 OK
+DEPLOYMENT CHECKLIST (write into README.md under "Deploy"):
 
-STEP 4 — Deploy frontend on Vercel:
-1. vercel.com → New Project → Import repo
+Railway (backend):
+1. Push repo to GitHub: git push origin main
+2. railway.app → New Project → Deploy from GitHub → select repo
+3. Service Settings: Root Directory = backend
+4. Variables: ANTHROPIC_API_KEY=[key], ALLOWED_ORIGINS=[vercel-url-no-trailing-slash]
+5. Settings → Networking → Generate Domain → port 8080
+6. Watch Deploy Logs for "Application startup complete"
+7. Visit [railway-url]/health → should return {"status":"ok"}
+
+Vercel (frontend):
+1. vercel.com → New Project → import repo
 2. Root Directory = frontend
-3. Environment Variables: NEXT_PUBLIC_BACKEND_URL = https://[railway-url] (NO trailing slash — trailing slash causes //chat 404)
-4. Set variable for All Environments (Production + Preview)
-5. Deploy
+3. Environment Variables: NEXT_PUBLIC_BACKEND_URL=[railway-url] ← NO trailing slash
+4. Set for All Environments (Production + Preview + Development)
+5. Deploy → visit [vercel-url] → UI should load
 
-STEP 5 — Fix CORS:
-Update ALLOWED_ORIGINS on Railway to the exact Vercel URL with no trailing slash.
-Railway redeploys automatically.
+CORS fix (do this last):
+Update Railway ALLOWED_ORIGINS = [vercel-url] (no trailing slash), Railway auto-redeploys.
 
 COMMON ERRORS:
-- "Failed to fetch" = ALLOWED_ORIGINS doesn't match browser origin. Check for trailing slash.
-- OPTIONS /chat returns 400 = same CORS issue.
-- POST //chat returns 404 = NEXT_PUBLIC_BACKEND_URL has trailing slash. Fix and redeploy Vercel.
-- "Application failed to respond" = check Deploy Logs for startup crash. Usually ANTHROPIC_API_KEY missing.
-- Build failed in 3 seconds = railway.toml not at repo root.
-
-STEP 6 — Update README with live URLs and commit.
+- "Failed to fetch": ALLOWED_ORIGINS wrong or has trailing slash
+- POST //chat 404: NEXT_PUBLIC_BACKEND_URL has trailing slash — fix and redeploy Vercel
+- OPTIONS /chat 400: Origin header doesn't exactly match ALLOWED_ORIGINS
+- Build fails in 3s: railway.toml not at repo root
+- "Application failed to respond": check Deploy Logs for startup crash — likely missing ANTHROPIC_API_KEY
 ```
 
 ---
 
-## PROMPT 15 — Presentation Script
+### PROMPT B12 — Presentation Document
 
 ```
-Write SCRIPT.md for [PROJECT_NAME] as a client-facing presentation document.
+Write PRESENTATION.md for [PROJECT_NAME] — a 10-slide deck outline with full speaker notes.
 
-Write a single dense paragraph (senior engineer technical summary) covering:
-- The Claude tool-use agent loop architecture (no LangChain, Anthropic SDK directly, ~40-line loop)
-- The 8 tools as thin data accessors and how Claude selects between them
-- Two-tier retrieval: relational JSON maps (<1ms) for structured queries, FAISS (<50ms) for semantic search
-- How the data was sourced (Wayback Machine CDX API or your scraping approach)
-- SSE streaming from FastAPI to Next.js — every token, tool call, cart update as a typed event
-- The deployment stack
+For each slide: Headline, Visual description, Content (bullets or table), exact Speaker Notes (word-for-word what to say).
 
-Then write a 10-slide presentation outline with speaker notes:
-Slide 1: The problem — what the user cannot do with keyword search
-Slide 2: The solution — what they can do with the agent (table: input type → what happens)
-Slide 3: Live demo cue — say "let me show you"
-Slide 4: Architecture diagram — ASCII, each component labeled
-Slide 5: How Claude decides which tool — explain tool-use API, no intent classifier
-Slide 6: Data pipeline — scraping approach, relational maps, FAISS indexing
-Slide 7: SSE streaming — why streaming matters, the event types, frontend reaction
-Slide 8: Evaluation — tool selection accuracy, scope adherence, response time
-Slide 9: What's next — 3 extensions ranked Low/Medium/High effort
-Slide 10: Likely Q&A — 5 questions with verbatim answers
+Slide 1 — The Problem (2 min)
+Slide 2 — The Solution (2 min): show a table of input types → what happens
+Slide 3 — Live Demo (15 min): narrate every click, read the talking point aloud, explain the risk alert
+Slide 4 — Architecture (5 min): ASCII diagram, one sentence per component, explain every design choice
+Slide 5 — How Claude Decides (5 min): explain tool-use API, no intent classifier, show compose example
+Slide 6 — Data Pipeline (5 min): scraping approach + why, maps + FAISS, incremental refresh
+Slide 7 — Streaming (3 min): SSE event types, why streaming matters for UX
+Slide 8 — Evaluation (5 min): accuracy metrics, scope adherence, response time numbers
+Slide 9 — Scalability (3 min): what breaks at 10x, migration path to Postgres, adding categories
+Slide 10 — Q&A Prep: 8 questions with verbatim answers
 
-Commit SCRIPT.md.
-```
+Q&A questions must include:
+1. Why Claude over GPT-4?
+2. Why FAISS over a hosted vector DB?
+3. How do you know the parts data is accurate?
+4. What happens if [DATA_SOURCE] changes their site structure?
+5. How would you add a new appliance category?
+6. Why not LangChain?
+7. How does this scale to 10 million parts?
+8. What would you build next with two more weeks?
 
----
-
-## PARALLEL EXECUTION MAP — 4-Hour Build
-
-```
-TIME    ACTION                              SESSION
-0:00    Prompt 1: Scaffold                  1
-0:10    Prompt 2: Scraper                   1 (starts scraping — takes 30-45 min)
-0:15    Prompt 3: Relational maps           2 (can write code while 2 runs)
-0:25    Prompt 4: FAISS index               2
-0:35    Prompt 5: Backend tools             2
-        Prompt 6: Agent loop                3 (parallel with tools)
-1:00    Prompt 7: FastAPI main              2
-1:10    Prompt 8: Frontend types + API      2
-        Prompt 9: Frontend components       3 (parallel)
-1:40    Prompt 10: Chat interface           2
-1:55    Prompt 11: App layout + page        2
-2:10    Scraper should be done by now — run Prompt 4 (embed) if not already
-2:20    Prompt 13: Design + data audit      1
-2:40    Prompt 12: READMEs                  1
-        Prompt 15: Script + presentation    3 (parallel with READMEs)
-3:00    Prompt 14: Deployment               1
-3:40    Test live URL                       You
-4:00    Done
+Also write a concise SCRIPT.md — one dense paragraph summarizing the entire technical architecture as a senior engineer would describe it to a client. Cover: agent loop, tool selection mechanism, retrieval tiers, data sourcing, streaming, deployment.
 ```
 
 ---
 
-## VARIABLES REFERENCE
+## PHASE 6 — FINAL AUDIT
 
-| Variable | PartSelect Example | Your Value |
-|----------|-------------------|------------|
-| [PROJECT_NAME] | partselect-agent | |
-| [DOMAIN] | appliance parts | |
-| [DATA_SOURCE] | PartSelect.com | |
-| [ENTITY] | part | |
-| [SCOPE] | refrigerators and dishwashers | |
-| [CATEGORY1] | refrigerator | |
-| [CATEGORY2] | dishwasher | |
-| [BRAND COLOR] | #e8651a | |
-| [CART URL] | partselect.com/shopping-cart/ | |
+### AUDIT A5 — Pre-Ship Checklist
+
+```
+Act as a tech lead doing a final pre-ship review of [PROJECT_NAME].
+
+Run through this checklist and report PASS / FAIL for each item:
+
+GIT:
+- [ ] git status is clean (no uncommitted changes)
+- [ ] .env is in .gitignore and NOT committed
+- [ ] .env.example IS committed with placeholder values only
+- [ ] No API keys in any committed file
+
+FUNCTIONALITY:
+- [ ] Backend /health returns 200
+- [ ] POST /chat with a symptom query streams a response with parts
+- [ ] POST /chat with a model number returns compatible parts
+- [ ] POST /chat with a part number returns part details
+- [ ] POST /chat with an out-of-scope query returns the decline message (not an error)
+- [ ] manage_cart add/remove/view/clear all work correctly
+- [ ] Frontend loads at localhost:3000 with welcome screen
+- [ ] Suggestion chips submit and get a response
+- [ ] Add to cart from ProductCard updates cart badge
+- [ ] Cart sidebar opens, shows items, shows subtotal
+
+DEPLOYMENT:
+- [ ] Railway Deploy Logs show no errors
+- [ ] /health returns 200 on the Railway URL
+- [ ] Vercel build completes with zero errors
+- [ ] Live URL loads the welcome screen
+- [ ] A query from the live URL gets a real response (not CORS error)
+- [ ] NEXT_PUBLIC_BACKEND_URL has no trailing slash
+- [ ] ALLOWED_ORIGINS matches Vercel URL exactly
+
+DOCUMENTATION:
+- [ ] README.md has the correct live URL
+- [ ] REQUIREMENTS.md exists
+- [ ] ARCHITECTURE.md exists
+- [ ] DESIGN.md exists
+- [ ] All 4 README files written
+
+For every FAIL: write the exact fix. Apply it. Re-run the check.
+Commit: git add -A && git commit -m "chore: pre-ship audit fixes" && git push origin main
+```
+
+---
+
+## PARALLEL EXECUTION MAP — 4-Hour Timeline
+
+```
+TIME    PROMPT          SESSION     NOTE
+0:00    P1 Requirements   1         PM planning — do not skip
+0:10    P2 Architecture   1
+0:20    P3 System design  1
+0:35    B1 Scaffold       1
+0:45    B2 Scraper        1         START FIRST — takes 30-45 min in background
+0:50    B3 Maps           2         PARALLEL
+        B4 Backend+Tools  3         PARALLEL
+1:20    A1 Backend audit  2         Code review while scraper runs
+        B5 FAISS index    3         Can write code before data is ready
+1:40    B6 Types+API      2         PARALLEL
+        B7 Components     3         PARALLEL
+2:10    A2 Frontend audit 2         PARALLEL
+        B8 ChatInterface  3         PARALLEL
+2:40    B9 App shell      1
+2:55    A3 PM audit       2         PARALLEL final reviews
+        A4 Engineer audit 3         PARALLEL
+3:20    B10 READMEs       2         PARALLEL
+        B11 Deployment    3         PARALLEL
+3:50    B12 Presentation  1
+4:10    A5 Pre-ship       1
+4:30    Done — record/present
+```
+
+---
+
+## CUT LIST — If You Run Out of Time
+
+Cut in this order. Never cut items marked KEEP.
+
+| Item | Cut? | Why it is safe to cut |
+|------|------|----------------------|
+| image proxy endpoint | Yes | Images just won't load in deployment |
+| CartSidebar animations | Yes | Cart still works |
+| ToolCallIndicator labels | Yes | Generic "thinking..." is fine |
+| model compatibility live scrape fallback | Yes | Map lookup still works |
+| sessionStorage message persistence | Yes | Page refresh loses history |
+| P3 DESIGN.md full document | Partial | Write just the diagram section |
+| A2 frontend audit | Yes | Ship with known minor issues |
+| **Agent loop** | **KEEP** | Core of the project |
+| **FAISS search** | **KEEP** | Core retrieval |
+| **SSE streaming** | **KEEP** | Core UX |
+| **Scope decline message** | **KEEP** | Evaluated criterion |
+| **REQUIREMENTS.md** | **KEEP** | PM deliverable |
+| **ARCHITECTURE.md** | **KEEP** | Design choices deliverable |
+| **Presentation deck** | **KEEP** | You are presenting live |
